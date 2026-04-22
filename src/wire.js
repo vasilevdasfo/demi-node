@@ -34,8 +34,18 @@ export function makeParser(onLine) {
   };
 }
 
-// Build hello frame (symmetric, both sides send after socket open)
-export function helloFrame({ nickname, agent, role, caps, lang, version, fpShort, nickLocked = false }) {
+// Build hello frame (symmetric, both sides send after socket open).
+//
+// `auth` is OPTIONAL but REQUIRED to enable trusted-peer socket rebind on reconnect.
+// It is a signed envelope (from identity.signEnvelope) proving that the sender
+// controls the full identity pubkey — NOT just the short fingerprint. The envelope
+// binds the sender pubkey to the current hyperswarm session pubkey so a captured
+// envelope cannot be replayed on a different connection.
+//
+// Callers that want rebind-after-restart must pass `auth` built from:
+//   signEnvelope(identity, 'hello-auth', { session: <hyperswarm-session-pubkey-hex>, ts: Date.now() })
+// and receivers must verify `by === identity.pubHex` AND `payload.session === info.publicKey`.
+export function helloFrame({ nickname, agent, role, caps, lang, version, fpShort, nickLocked = false, auth = null }) {
   return {
     type: 'hello',
     v: version || '0.3.10-demi',
@@ -46,6 +56,7 @@ export function helloFrame({ nickname, agent, role, caps, lang, version, fpShort
     lang: String(lang || 'en').slice(0, 5),
     fpShort: String(fpShort || '').slice(0, 16),
     nickLocked: Boolean(nickLocked),
+    ...(auth ? { auth } : {}),
   };
 }
 
@@ -95,4 +106,43 @@ export function detectInjection(text) {
     if (re.test(text)) reasons.push(re.source);
   }
   return { flagged: reasons.length > 0, reasons };
+}
+
+// ---------- Agent RPC framing (structured chat frames) ----------
+// Some chat messages are actually structured RPC between agents (e.g. two
+// Claude sessions coordinating work via claim/release/status/heartbeat).
+// The wire format is intentionally simple: an agent frame is just a chat
+// frame whose `text` field is a JSON object with a recognised `type`.
+// This keeps compatibility with plain-chat clients that never parsed it.
+export const AGENT_KINDS = new Set([
+  'claim',      // { type:'claim', path, ttl, session?, reason?, ts? }
+  'release',    // { type:'release', path, session?, ts? }
+  'status',     // { type:'status', task, state, branch?, ts? }
+  'heartbeat',  // { type:'heartbeat', claim, ttl_extend?, ts? }
+  'handoff',    // { type:'handoff', branch, from, to, reason?, ts? }
+  'conflict',   // { type:'conflict', file, mine_sha?, theirs_sha?, question?, ts? }
+]);
+
+/**
+ * Parse a chat.text as an agent RPC frame.
+ * Returns the parsed object when `text` is JSON with a recognised `type`,
+ * or `null` otherwise. Safe on any input (never throws).
+ */
+export function parseAgentFrame(text) {
+  if (!text || typeof text !== 'string' || text[0] !== '{') return null;
+  try {
+    const obj = JSON.parse(text);
+    if (obj && typeof obj === 'object' && AGENT_KINDS.has(obj.type)) return obj;
+  } catch {}
+  return null;
+}
+
+/**
+ * Serialize an agent frame payload for transport as chat.text.
+ * Always stamps a `ts` (unix seconds) if not provided.
+ */
+export function agentFrameText(type, payload = {}) {
+  if (!AGENT_KINDS.has(type)) throw new Error(`unknown agent frame type: ${type}`);
+  const ts = payload.ts || Math.floor(Date.now() / 1000);
+  return JSON.stringify({ type, ts, ...payload });
 }

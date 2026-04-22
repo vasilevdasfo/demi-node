@@ -104,6 +104,15 @@ export function getPeerByNickname(nickname) {
   return db.prepare('SELECT * FROM peers WHERE nickname = ? OR self_nickname = ? LIMIT 1').get(nickname, nickname);
 }
 
+// Resolve a trusted/seen peer by the short fingerprint carried in hello frames.
+// Returns null if the fpShort matches zero or more than one peer (ambiguous — refuse to bind).
+export function getPeerByFpShort(fpShort) {
+  if (!fpShort || typeof fpShort !== 'string') return null;
+  const rows = db.prepare('SELECT * FROM peers WHERE fp_short = ? LIMIT 2').all(fpShort);
+  if (rows.length !== 1) return null;
+  return rows[0];
+}
+
 export function setTrust(pubkey, level) {
   upsertPeer(pubkey, { trust: level });
 }

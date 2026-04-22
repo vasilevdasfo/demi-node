@@ -7,6 +7,7 @@ import readline from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { loadConfig, paths } from '../src/paths.js';
 import { loadLocale, t } from '../src/i18n.js';
+import { agentFrameText } from '../src/wire.js';
 import fs from 'node:fs';
 
 const cfg = loadConfig();
@@ -166,6 +167,89 @@ program.command('start')
   .description('Start the node (foreground)')
   .action(async () => {
     await import('../src/index.js');
+  });
+
+// ---------- Agent RPC shortcuts (claim / release / status / heartbeat / handoff) ----------
+// Resolve a nickname or hex pubkey to a pubkey. Opens the DB lazily.
+async function resolvePeer(target) {
+  if (/^[0-9a-f]{64}$/.test(target)) return target;
+  const { getPeerByNickname, openDb } = await import('../src/db.js');
+  openDb();
+  const p = getPeerByNickname(target);
+  if (!p) throw new Error('Peer not found: ' + target);
+  return p.pubkey;
+}
+
+// Send a pre-serialised agent frame as a chat message and print a tiny receipt.
+async function sendAgent(target, type, payload) {
+  const pubkey = await resolvePeer(target);
+  const text = agentFrameText(type, payload);
+  const r = await rpc('chat.send', { pubkey, text });
+  if (r.ok) console.log(`→ ${type}: ${text}`);
+  else console.error('Failed: not delivered');
+}
+
+program.command('claim')
+  .description('Claim a file / path so other agents see it as locked')
+  .argument('<peer>', 'Peer nickname or pubkey')
+  .argument('<path>', 'File path to claim')
+  .option('--ttl <seconds>', 'Claim TTL in seconds', '600')
+  .option('--reason <text>', 'Reason for the claim')
+  .option('--session <name>', 'Session name (free-form)')
+  .action(async (peer, path, opts) => {
+    await sendAgent(peer, 'claim', {
+      path,
+      ttl: Number(opts.ttl),
+      reason: opts.reason,
+      session: opts.session,
+    });
+  });
+
+program.command('release')
+  .description('Release a previously-claimed path')
+  .argument('<peer>')
+  .argument('<path>')
+  .option('--session <name>')
+  .action(async (peer, path, opts) => {
+    await sendAgent(peer, 'release', { path, session: opts.session });
+  });
+
+program.command('report')
+  .description('Report status on a task (e.g. done / wip / blocked) to a peer')
+  .argument('<peer>', 'Peer nickname or pubkey')
+  .argument('<task>', 'Task label')
+  .argument('<state>', 'State: done | wip | blocked | todo')
+  .option('--branch <name>')
+  .action(async (peer, task, state, opts) => {
+    await sendAgent(peer, 'status', { task, state, branch: opts.branch });
+  });
+
+program.command('heartbeat')
+  .description('Extend a claim TTL so others know you are still working')
+  .argument('<peer>')
+  .argument('<path>', 'Claimed path to heartbeat')
+  .option('--extend <seconds>', 'Additional TTL in seconds', '600')
+  .action(async (peer, path, opts) => {
+    await sendAgent(peer, 'heartbeat', {
+      claim: path,
+      ttl_extend: Number(opts.extend),
+    });
+  });
+
+program.command('handoff')
+  .description('Hand off a branch to another agent')
+  .argument('<peer>')
+  .argument('<branch>')
+  .option('--from <name>', 'From session / agent name')
+  .option('--to <name>',   'To session / agent name')
+  .option('--reason <text>')
+  .action(async (peer, branch, opts) => {
+    await sendAgent(peer, 'handoff', {
+      branch,
+      from: opts.from,
+      to: opts.to,
+      reason: opts.reason,
+    });
   });
 
 program.parse();

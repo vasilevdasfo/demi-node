@@ -1,5 +1,5 @@
 // src/chat.js — message send/receive with rate limit + injection detection
-import { chatFrame, encode, detectInjection, sanitizeText } from './wire.js';
+import { chatFrame, encode, detectInjection, sanitizeText, parseAgentFrame } from './wire.js';
 import { saveMessage, getHistory, upsertPeer, audit } from './db.js';
 import { loadConfig } from './paths.js';
 
@@ -37,9 +37,35 @@ export async function sendChat({ transport, peerPubkey, text }) {
     text: clean,
     flagged,
   });
-  audit('chat.out', { peer: peerPubkey.slice(0, 16), len: clean.length, delivered: ok });
 
-  return { ok, delivered: ok, ts: frame.ts };
+  // Distinguish structured agent RPC from plain chat in the audit trail so
+  // `claim/release/status/heartbeat` events are grep-able without parsing JSON.
+  const agent = parseAgentFrame(clean);
+  if (agent) {
+    audit('agent.' + agent.type, {
+      peer: peerPubkey.slice(0, 16),
+      direction: 'out',
+      delivered: ok,
+      ...pickAgentMeta(agent),
+    });
+  } else {
+    audit('chat.out', { peer: peerPubkey.slice(0, 16), len: clean.length, delivered: ok });
+  }
+
+  return { ok, delivered: ok, ts: frame.ts, agent: agent || undefined };
+}
+
+// Extract the meta fields that matter per-agent-type so audit rows stay flat.
+function pickAgentMeta(agent) {
+  switch (agent.type) {
+    case 'claim':     return { path: agent.path, ttl: agent.ttl, reason: agent.reason };
+    case 'release':   return { path: agent.path };
+    case 'status':    return { task: agent.task, state: agent.state, branch: agent.branch };
+    case 'heartbeat': return { claim: agent.claim, ttl_extend: agent.ttl_extend };
+    case 'handoff':   return { branch: agent.branch, from: agent.from, to: agent.to };
+    case 'conflict':  return { file: agent.file, question: agent.question };
+    default:          return {};
+  }
 }
 
 // Handle incoming chat frame
@@ -54,7 +80,17 @@ export function handleIncomingChat({ pubkey, frame, onBroadcast }) {
 
   saveMessage({ pubkey, direction: 'in', ts, text, flagged });
   upsertPeer(pubkey, { online: true });
-  audit('chat.in', { peer: pubkey.slice(0, 16), len: text.length, flagged, reasons });
+
+  const agent = parseAgentFrame(text);
+  if (agent) {
+    audit('agent.' + agent.type, {
+      peer: pubkey.slice(0, 16),
+      direction: 'in',
+      ...pickAgentMeta(agent),
+    });
+  } else {
+    audit('chat.in', { peer: pubkey.slice(0, 16), len: text.length, flagged, reasons });
+  }
 
   if (onBroadcast) {
     onBroadcast({
@@ -63,6 +99,7 @@ export function handleIncomingChat({ pubkey, frame, onBroadcast }) {
       ts,
       text,
       flagged,
+      agent: agent || undefined,
     });
   }
 }

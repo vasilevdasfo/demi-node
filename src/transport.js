@@ -3,8 +3,9 @@ import Hyperswarm from 'hyperswarm';
 import crypto from 'node:crypto';
 import b4a from 'b4a';
 import { makeParser, encode, helloFrame } from './wire.js';
-import { upsertPeer, getPeer, audit } from './db.js';
+import { upsertPeer, getPeer, getPeerByFpShort, audit } from './db.js';
 import { sortedPairTopic } from './pair.js';
+import { signEnvelope, verifyEnvelope } from './identity.js';
 
 export class Transport {
   constructor({ identity, nickname, lang = 'en', clubTopic = 'demi-club/v1', onMessage }) {
@@ -71,9 +72,32 @@ export class Transport {
     // Socket-local state (shared with parser closure via property)
     socket._remotePubHex = null;
 
+    const hyperHex = b4a.toString(peerPubRaw, 'hex');
     const parser = makeParser((msg) => {
       if (msg.type === 'hello') {
-        audit('transport.hello', { nick: msg.nick, fp: msg.fpShort });
+        // Socket rebind on reconnect is SECURITY-CRITICAL. fpShort alone is 32 bits —
+        // trivially brute-forceable (seconds on a laptop) to impersonate a trusted peer.
+        // So we accept rebind ONLY when hello carries a verifiable signed auth envelope
+        // whose `by` matches a trusted/seen peer in the DB AND whose payload.session
+        // matches THIS hyperswarm session pubkey (prevents replay across connections).
+        if (!socket._remotePubHex && msg.auth) {
+          const ok = verifyEnvelope(msg.auth);
+          const payload = msg.auth?.payload || {};
+          const peer = getPeer(msg.auth?.by || '');
+          const sessionOk = payload.session === hyperHex;
+          const freshOk = typeof payload.ts === 'number' && Math.abs(Date.now() - payload.ts) < 60_000;
+          if (ok && peer && sessionOk && freshOk &&
+              (peer.trust === 'trusted' || peer.trust === 'seen')) {
+            this.attachSocket(peer.pubkey, socket);
+            upsertPeer(peer.pubkey, { online: true, nickname: msg.nick || peer.nickname });
+            audit('transport.rebind', { peer: peer.pubkey.slice(0, 16), verified: true });
+          } else {
+            audit('transport.rebind-reject', {
+              verified: ok, hasPeer: !!peer, sessionOk, freshOk, fp: msg.fpShort,
+            });
+          }
+        }
+        audit('transport.hello', { nick: msg.nick, fp: msg.fpShort, auth: !!msg.auth });
         this.onMessage({ kind: 'hello', from: socket._remotePubHex, frame: msg });
       } else if (msg.type === 'chat' && socket._remotePubHex) {
         this.onMessage({ kind: 'chat', pubkey: socket._remotePubHex, frame: msg });
@@ -92,11 +116,17 @@ export class Transport {
         this.sockets.delete(pk);
         upsertPeer(pk, { online: false });
       }
-      const hyperHex = b4a.toString(peerPubRaw, 'hex');
       this.sockets.delete(hyperHex);
     });
 
-    // Send our hello immediately
+    // Sign an auth envelope that binds our identity to THIS hyperswarm session so
+    // a captured envelope can't be replayed on a different socket/peer.
+    const auth = signEnvelope(this.identity, 'hello-auth', {
+      session: hyperHex,
+      ts: Date.now(),
+    });
+
+    // Send our hello immediately (with signed auth so remote can rebind us safely)
     const hello = helloFrame({
       nickname: this.nickname,
       agent: 'DEMI',
@@ -105,11 +135,11 @@ export class Transport {
       lang: this.lang,
       version: '0.1.0-alpha.1',
       fpShort: this.identity.fpShort,
+      auth,
     });
     socket.write(encode(hello));
 
     // Index under hyperswarm pubkey until pair.js rebinds under identity pubHex
-    const hyperHex = b4a.toString(peerPubRaw, 'hex');
     this.sockets.set(hyperHex, socket);
 
     // Notify pair.js (and anyone else) about the new socket so they can push frames on it
