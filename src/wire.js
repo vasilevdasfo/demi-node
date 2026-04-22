@@ -114,6 +114,12 @@ export function detectInjection(text) {
 // The wire format is intentionally simple: an agent frame is just a chat
 // frame whose `text` field is a JSON object with a recognised `type`.
 // This keeps compatibility with plain-chat clients that never parsed it.
+//
+// Schema version: every outgoing frame stamps `v: AGENT_SCHEMA_V` so future
+// versions can add fields without breaking older parsers. Incoming frames
+// without `v` are tolerated as v:"1.0" (no behaviour change).
+export const AGENT_SCHEMA_V = '1.0';
+
 export const AGENT_KINDS = new Set([
   'claim',      // { type:'claim', path, ttl, session?, reason?, ts? }
   'release',    // { type:'release', path, session?, ts? }
@@ -121,6 +127,10 @@ export const AGENT_KINDS = new Set([
   'heartbeat',  // { type:'heartbeat', claim, ttl_extend?, ts? }
   'handoff',    // { type:'handoff', branch, from, to, reason?, ts? }
   'conflict',   // { type:'conflict', file, mine_sha?, theirs_sha?, question?, ts? }
+  'review',     // { type:'review', target_sha, target_scope?, verdict, findings[], reviewer?,
+                //   reviewer_role?, sig? } — peer code review between agents. `sig` is a
+                //   signed envelope produced by identity.signEnvelope(id,'agent-review',body)
+                //   over the review body excluding the sig field itself; receivers MAY verify.
 ]);
 
 /**
@@ -139,10 +149,11 @@ export function parseAgentFrame(text) {
 
 /**
  * Serialize an agent frame payload for transport as chat.text.
- * Always stamps a `ts` (unix seconds) if not provided.
+ * Always stamps a `ts` (unix seconds) and `v` (schema version) if not provided.
  */
 export function agentFrameText(type, payload = {}) {
   if (!AGENT_KINDS.has(type)) throw new Error(`unknown agent frame type: ${type}`);
   const ts = payload.ts || Math.floor(Date.now() / 1000);
-  return JSON.stringify({ type, ts, ...payload });
+  const v = payload.v || AGENT_SCHEMA_V;
+  return JSON.stringify({ type, v, ts, ...payload });
 }

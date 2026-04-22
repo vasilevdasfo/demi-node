@@ -4,7 +4,7 @@ import { ensureHome, paths, loadConfig, touchActive, touchLastSeen } from './pat
 import { loadIdentity, generateIdentity, panicWipe, fingerprint } from './identity.js';
 import { getOrCreateNickname } from './nickname.js';
 import { openDb, listPeers, getHistory, upsertPeer } from './db.js';
-import { Transport } from './transport.js';
+import { createTransport } from './transport/index.js';
 import { UiServer } from './ui-server.js';
 import { sendChat, history } from './chat.js';
 import { createPair, redeemPair } from './pair.js';
@@ -61,8 +61,8 @@ async function main() {
     }
   } catch {}
 
-  // Transport (P2P)
-  const transport = new Transport({
+  // Transport (P2P) — pluggable via DEMI_TRANSPORT env (hyperswarm default, libp2p fallback)
+  const transport = await createTransport({
     identity,
     nickname,
     lang: cfg.lang,
@@ -74,6 +74,7 @@ async function main() {
             pubkey: ev.pubkey,
             frame: ev.frame,
             onBroadcast: (e) => ui.broadcast(e),
+            ownPubHex: identity.pubHex,
           });
         });
       } else if (ev.kind === 'hello') {

@@ -183,9 +183,16 @@ async function resolvePeer(target) {
 // Send a pre-serialised agent frame as a chat message and print a tiny receipt.
 async function sendAgent(target, type, payload) {
   const pubkey = await resolvePeer(target);
+  return sendAgentTo(pubkey, target, type, payload);
+}
+
+// Same as sendAgent but skips re-resolving the peer — used by callers that
+// already have the peer pubkey (e.g. signed review frames that must bind
+// `recipient` to the pubkey BEFORE signing).
+async function sendAgentTo(pubkey, label, type, payload) {
   const text = agentFrameText(type, payload);
   const r = await rpc('chat.send', { pubkey, text });
-  if (r.ok) console.log(`→ ${type}: ${text}`);
+  if (r.ok) console.log(`→ ${type} (${label}): ${text}`);
   else console.error('Failed: not delivered');
 }
 
@@ -250,6 +257,77 @@ program.command('handoff')
       to: opts.to,
       reason: opts.reason,
     });
+  });
+
+program.command('review')
+  .description('Send a peer code-review verdict on a commit / scope')
+  .argument('<peer>',       'Peer nickname or pubkey')
+  .argument('<target_sha>', 'Commit SHA (or other stable id) being reviewed')
+  .argument('<verdict>',    'approve | changes | block  (normalised to lowercase)')
+  .option('--scope <text>',        'Optional scope (file path, subsystem, etc.)')
+  .option('--findings <json>',     'JSON array of findings, or @path/to/file.json')
+  .option('--reviewer <name>',     'Reviewer label (defaults to own pubkey)')
+  .option('--reviewer-role <role>','Reviewer role, e.g. security / business / ux')
+  .option('--sign',                'Attach a signed envelope proving the reviewer identity')
+  .action(async (peer, target_sha, verdict, opts) => {
+    // Normalise verdict — accept loose input, emit one canonical form so receivers
+    // don't have to case-fold. 'request_changes'/'REQUEST_CHANGES'/'CHANGES' all map
+    // to 'changes'; 'APPROVE' → 'approve'; 'BLOCK' → 'block'.
+    const vRaw = String(verdict).toLowerCase();
+    let vNorm;
+    if (vRaw === 'approve') vNorm = 'approve';
+    else if (vRaw === 'block') vNorm = 'block';
+    else if (vRaw === 'changes' || vRaw === 'request_changes' || vRaw === 'request-changes') vNorm = 'changes';
+    else return console.error(`verdict must be one of: approve | changes | block (got ${verdict})`);
+
+    let findings = [];
+    if (opts.findings) {
+      let raw = opts.findings;
+      if (raw.startsWith('@')) {
+        raw = fs.readFileSync(raw.slice(1), 'utf8');
+      }
+      try {
+        findings = JSON.parse(raw);
+        if (!Array.isArray(findings)) throw new Error('findings must be a JSON array');
+      } catch (e) {
+        return console.error('bad --findings: ' + e.message);
+      }
+    }
+
+    const peerPubkey = await resolvePeer(peer);
+
+    // Base body — always includes these fields whether signed or not.
+    const body = {
+      target_sha,
+      target_scope: opts.scope,
+      verdict: vNorm,
+      findings,
+      reviewer: opts.reviewer,
+      reviewer_role: opts.reviewerRole,
+    };
+    for (const k of Object.keys(body)) if (body[k] === undefined) delete body[k];
+
+    if (opts.sign) {
+      const { loadIdentity, signEnvelope } = await import('../src/identity.js');
+      const crypto = await import('node:crypto');
+      const id = loadIdentity();
+      if (!id) return console.error('No identity on disk — cannot --sign');
+      if (!body.reviewer) body.reviewer = id.pubHex;
+
+      // Bind signature to THIS recipient + a fresh nonce + a signed timestamp so
+      // a captured signature cannot be (a) replayed to a different peer, (b)
+      // replayed at a different time, or (c) bit-flipped while preserving `sig`.
+      body.recipient = peerPubkey;
+      body.nonce = crypto.randomBytes(16).toString('hex');
+      body.signed_ts = Date.now();
+
+      // Signed payload = snapshot of body WITHOUT `sig`. Receiver rebuilds the
+      // same snapshot and verifyEnvelope() fails on any tamper.
+      const signedPayload = { ...body };
+      body.sig = signEnvelope(id, 'agent-review', signedPayload);
+    }
+
+    await sendAgentTo(peerPubkey, peer, 'review', body);
   });
 
 program.parse();
