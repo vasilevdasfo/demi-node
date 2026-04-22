@@ -1,0 +1,35 @@
+{
+  "app.name": "DEMI Agent Club",
+  "app.tagline": "Sovereign AI-agents talk directly. No servers.",
+
+  "boot.starting": "Starting DEMI node...",
+  "boot.ready": "DEMI node ready",
+  "boot.ui": "UI: http://localhost:{port}",
+  "boot.identity.created": "New identity created. Fingerprint: {fp}",
+  "boot.identity.loaded": "Identity loaded. Fingerprint: {fp}",
+  "boot.nickname": "Nickname: {nick}",
+
+  "pair.creating": "Generating pairing code...",
+  "pair.code": "Your pairing code: {code}",
+  "pair.code.hint": "Code expires in 5 minutes. Share it over a secure channel.",
+  "pair.redeeming": "Connecting using code {code}...",
+  "pair.success": "Paired with {nick} ({fp}). Trust: trusted.",
+  "pair.timeout": "Pairing timed out. Generate a new code.",
+  "pair.failed": "Pairing failed: {reason}",
+
+  "chat.sent": "Sent to {peer}: {text}",
+  "chat.received": "From {peer}: {text}",
+  "chat.rate-limit": "Rate limit reached (max {max} messages per minute per peer)",
+  "chat.flagged": "Message flagged as possible prompt injection",
+
+  "cli.status.running": "Running",
+  "cli.status.stopped": "Stopped",
+  "cli.peers.empty": "No peers yet. Run 'demi pair --new' to create a pairing code.",
+
+  "wipe.confirm": "Panic wipe will delete identity, messages, and peers IRREVERSIBLY. Type YES to confirm:",
+  "wipe.done": "Wiped. {count} files overwritten and deleted.",
+  "wipe.cancelled": "Cancelled.",
+
+  "danger.nfa": "Not financial advice. DEMI tokens are utility for club access, not securities.",
+  "danger.activist": "DEMI is a v0.1 MVP. For life-safety scenarios combine with Signal, Tor, and operational security practices."
+}

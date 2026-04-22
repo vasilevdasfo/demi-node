@@ -1,0 +1,196 @@
+/* DEMI Observer UI — gold on black */
+:root {
+  --bg: #0a0a0a;
+  --surface: #141414;
+  --surface-2: #1c1c1c;
+  --border: #2a2a2a;
+  --fg: #e8e6e1;
+  --fg-dim: #8b8780;
+  --gold: #c9a961;
+  --gold-dim: #8f7a45;
+  --danger: #c94a4a;
+  --ok: #6aa864;
+  --off: #4a4a4a;
+  --serif: "Playfair Display", Georgia, serif;
+  --sans: -apple-system, "SF Pro Text", system-ui, "Segoe UI", Roboto, sans-serif;
+  --mono: "SF Mono", Menlo, Consolas, monospace;
+}
+
+@import url("https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;700&display=swap");
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; height: 100%;
+  background: var(--bg); color: var(--fg);
+  font-family: var(--sans); font-size: 14px; line-height: 1.45;
+}
+a { color: var(--gold); text-decoration: none; }
+
+/* Header bar */
+.bar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 20px; border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, #121212 0%, #0a0a0a 100%);
+}
+.brand { display: flex; align-items: baseline; gap: 10px; }
+.brand .logo { color: var(--gold); font-size: 18px; }
+.brand .name { font-family: var(--serif); font-weight: 700; font-size: 20px; color: var(--gold); letter-spacing: 0.05em; }
+.brand .tag { color: var(--fg-dim); font-size: 12px; font-style: italic; }
+
+.me { display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12px; }
+.me .nick { color: var(--gold); font-weight: 600; }
+.me .fp { color: var(--fg-dim); }
+.me .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+.me select {
+  background: var(--surface-2); color: var(--fg); border: 1px solid var(--border);
+  padding: 2px 6px; border-radius: 3px; font-size: 11px; cursor: pointer;
+}
+
+/* Main 3-column layout */
+main {
+  display: grid;
+  grid-template-columns: 260px 1fr 260px;
+  height: calc(100% - 52px);
+  gap: 0;
+}
+.peers, .panel { background: var(--surface); border-right: 1px solid var(--border); overflow-y: auto; }
+.panel { border-right: none; border-left: 1px solid var(--border); }
+.chat { display: flex; flex-direction: column; background: var(--bg); }
+
+/* Sections */
+.section-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 16px 10px; border-bottom: 1px solid var(--border);
+}
+.peers h3, .panel h3 {
+  margin: 0; font-family: var(--serif); font-size: 16px; color: var(--gold); font-weight: 500;
+}
+.panel h3 { padding: 14px 16px 10px; border-bottom: 1px solid var(--border); }
+.actions { display: flex; gap: 6px; }
+
+/* Buttons */
+.btn, .btn-gold, .btn-danger {
+  font-family: var(--sans); font-size: 12px; padding: 5px 10px;
+  border-radius: 3px; cursor: pointer; border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--fg); transition: all 0.15s;
+}
+.btn:hover { border-color: var(--gold-dim); }
+.btn-gold {
+  background: var(--gold); color: #000; border-color: var(--gold);
+  font-weight: 600; letter-spacing: 0.02em;
+}
+.btn-gold:hover:not(:disabled) { background: #d9bb71; }
+.btn-gold:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-danger { background: transparent; color: var(--danger); border-color: var(--danger); }
+.btn-danger:hover { background: var(--danger); color: #fff; }
+
+/* Pair code display */
+.pair-code {
+  margin: 12px 16px; padding: 14px; background: var(--surface-2);
+  border: 1px solid var(--gold-dim); border-radius: 4px; text-align: center;
+}
+.pair-code.hidden { display: none; }
+.pair-code .pair-title { font-size: 11px; color: var(--fg-dim); margin-bottom: 6px; }
+.pair-code .pair-digits {
+  font-family: var(--mono); font-size: 22px; font-weight: 600;
+  color: var(--gold); letter-spacing: 0.12em; padding: 6px 0;
+}
+.pair-code .pair-hint { font-size: 11px; color: var(--fg-dim); margin-top: 6px; }
+
+/* Peer list */
+.peers-list { list-style: none; padding: 0; margin: 0; }
+.peer {
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  grid-template-areas:
+    "dot nick fp"
+    "dot trust trust";
+  column-gap: 8px; row-gap: 1px;
+  padding: 10px 16px; border-bottom: 1px solid var(--border);
+  cursor: pointer; transition: background 0.12s;
+}
+.peer:hover { background: var(--surface-2); }
+.peer.active { background: var(--surface-2); border-left: 2px solid var(--gold); padding-left: 14px; }
+.peer .dot { grid-area: dot; align-self: center; }
+.peer .dot.on { color: var(--ok); }
+.peer .dot.off { color: var(--off); }
+.peer .nick { grid-area: nick; color: var(--fg); font-weight: 500; }
+.peer .fp { grid-area: fp; font-family: var(--mono); font-size: 10px; color: var(--fg-dim); }
+.peer .trust { grid-area: trust; font-size: 10px; color: var(--gold-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+.peers-list .empty { padding: 20px; color: var(--fg-dim); text-align: center; font-style: italic; }
+
+/* Chat area */
+.chat-head {
+  padding: 14px 20px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: baseline; gap: 12px;
+}
+.chat-with { font-family: var(--serif); font-size: 18px; color: var(--gold); }
+.chat-fp { font-family: var(--mono); font-size: 11px; color: var(--fg-dim); }
+
+.chat-log {
+  list-style: none; margin: 0; padding: 12px 20px;
+  flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
+}
+.msg {
+  max-width: 75%; padding: 8px 12px; border-radius: 8px;
+  display: flex; flex-direction: column;
+}
+.msg.in { background: var(--surface); align-self: flex-start; }
+.msg.out { background: var(--gold-dim); color: #111; align-self: flex-end; }
+.msg.flagged { border: 1px solid var(--danger); }
+.msg .ts { font-size: 10px; opacity: 0.6; margin-bottom: 2px; font-family: var(--mono); }
+.msg .text { word-break: break-word; white-space: pre-wrap; }
+
+.chat-form {
+  display: flex; gap: 8px; padding: 12px 20px;
+  border-top: 1px solid var(--border); background: var(--surface);
+}
+.chat-form input {
+  flex: 1; padding: 8px 12px; font-family: var(--sans); font-size: 14px;
+  background: var(--surface-2); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 3px;
+}
+.chat-form input:focus { outline: none; border-color: var(--gold-dim); }
+.chat-form input:disabled { opacity: 0.5; }
+
+/* Health panel */
+.panel .info {
+  list-style: none; margin: 0; padding: 10px 16px;
+}
+.panel .info li {
+  margin-bottom: 10px; font-size: 12px; color: var(--fg-dim);
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+}
+.panel .info b {
+  color: var(--gold); font-family: var(--mono); font-weight: 500;
+}
+.panel .info code {
+  font-family: var(--mono); font-size: 10px; color: var(--fg);
+  word-break: break-all; text-align: right; max-width: 160px;
+}
+.panel .danger { padding: 16px; margin-top: auto; border-top: 1px solid var(--border); }
+.panel .note { font-size: 11px; color: var(--fg-dim); margin-top: 10px; line-height: 1.5; }
+
+/* Dialogs */
+dialog {
+  background: var(--surface); color: var(--fg);
+  border: 1px solid var(--gold-dim); border-radius: 6px;
+  padding: 20px; min-width: 320px;
+  font-family: var(--sans);
+}
+dialog::backdrop { background: rgba(0, 0, 0, 0.7); }
+dialog h3 { font-family: var(--serif); color: var(--gold); margin: 0 0 14px; font-weight: 500; }
+dialog input {
+  width: 100%; padding: 8px 10px; font-family: var(--mono); font-size: 14px;
+  background: var(--surface-2); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 3px; margin-bottom: 14px;
+}
+dialog input:focus { outline: none; border-color: var(--gold); }
+dialog .row { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* Responsive */
+@media (max-width: 900px) {
+  main { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; }
+  .peers, .panel { max-height: 200px; border-right: none; border-bottom: 1px solid var(--border); }
+  .panel { border-left: none; }
+}

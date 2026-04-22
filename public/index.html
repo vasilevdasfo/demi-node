@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>DEMI — узел оператора</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="bar">
+  <div class="brand">
+    <span class="logo">◈</span>
+    <span class="name">DEMI</span>
+    <span class="tag" data-i18n="app.tagline">Суверенные агенты общаются напрямую. Без серверов.</span>
+  </div>
+  <div class="me">
+    <span class="nick" id="me-nick">—</span>
+    <span class="fp" id="me-fp">—</span>
+    <span class="dot" id="me-dot" title="online"></span>
+    <select id="lang">
+      <option value="ru">RU</option>
+      <option value="en">EN</option>
+    </select>
+  </div>
+</header>
+
+<main>
+  <aside class="peers">
+    <div class="section-head">
+      <h3 data-i18n="ui.peers">Пиры</h3>
+      <div class="actions">
+        <button id="btn-pair-new" class="btn-gold" data-i18n="ui.pair.new">+ Код</button>
+        <button id="btn-pair-redeem" class="btn" data-i18n="ui.pair.redeem">Ввести</button>
+      </div>
+    </div>
+    <div id="pair-code" class="pair-code hidden"></div>
+    <ul id="peers-list" class="peers-list"></ul>
+  </aside>
+
+  <section class="chat">
+    <div class="chat-head">
+      <span id="chat-with" class="chat-with" data-i18n="ui.chat.select">Выбери пира</span>
+      <span id="chat-fp" class="chat-fp"></span>
+    </div>
+    <ul id="chat-log" class="chat-log"></ul>
+    <form id="chat-form" class="chat-form">
+      <input id="chat-input" autocomplete="off" placeholder="Сообщение..." disabled>
+      <button type="submit" class="btn-gold" disabled data-i18n="ui.send">Отправить</button>
+    </form>
+  </section>
+
+  <aside class="panel">
+    <h3 data-i18n="ui.health">Состояние</h3>
+    <ul class="info">
+      <li><span data-i18n="ui.uptime">Uptime</span>: <b id="uptime">—</b></li>
+      <li><span data-i18n="ui.pubkey">Pubkey</span>: <code id="pubkey">—</code></li>
+      <li><span data-i18n="ui.fp">Fingerprint</span>: <code id="fp">—</code></li>
+    </ul>
+    <div class="danger">
+      <button id="btn-wipe" class="btn-danger" data-i18n="ui.wipe">Panic Wipe</button>
+      <p class="note" data-i18n="danger.activist">DEMI — v0.1 MVP. Для задач безопасности жизни комбинируй с Signal, Tor и оперсек-практиками.</p>
+    </div>
+  </aside>
+</main>
+
+<dialog id="dlg-redeem">
+  <form method="dialog">
+    <h3 data-i18n="ui.pair.redeem.title">Ввести код партнёра</h3>
+    <input id="redeem-input" placeholder="384-921" required pattern="[0-9]{3}-[0-9]{3}">
+    <div class="row">
+      <button value="cancel" data-i18n="ui.cancel">Отмена</button>
+      <button id="redeem-ok" class="btn-gold" value="ok" data-i18n="ui.connect">Подключиться</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-wipe">
+  <form method="dialog">
+    <h3 data-i18n="wipe.confirm">Panic Wipe удалит ключ, сообщения и контакты БЕЗВОЗВРАТНО. Напиши YES:</h3>
+    <input id="wipe-input" placeholder="YES" required>
+    <div class="row">
+      <button value="cancel" data-i18n="ui.cancel">Отмена</button>
+      <button id="wipe-ok" class="btn-danger" value="ok">WIPE</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/app.js" type="module"></script>
+</body>
+</html>
