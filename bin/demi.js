@@ -75,23 +75,39 @@ program.command('peers')
   });
 
 program.command('pair')
-  .description('Create or redeem pairing code')
-  .option('--new', 'Create new pairing code')
-  .argument('[code]', 'Pairing code to redeem, e.g. 384-921')
-  .action(async (code, opts) => {
+  .description('Create or redeem a pairing code / token')
+  .option('--new', 'Create new pairing code (and token, on libp2p transport)')
+  .argument('[arg]', 'Pairing code (hyperswarm) or token "demi-pair1:..." (libp2p)')
+  .action(async (arg, opts) => {
     if (opts.new) {
       const r = await rpc('pair.new');
-      console.log(t('pair.code', { code: r.code }));
-      console.log(t('pair.code.hint'));
-      console.log('\nShare this code with your friend over a secure channel.');
-      console.log('When they enter it, both nodes will connect automatically.');
+      if (r.token) {
+        // libp2p transport: token is the only safe way to redeem.
+        console.log('Pair token (copy-paste to peer over a trusted channel):');
+        console.log('');
+        console.log(r.token);
+        console.log('');
+        console.log(`Short reference code: ${r.code} (matches the token's embedded code)`);
+        console.log('');
+        console.log('Treat the token as a one-time-use secret. Share via DM, not public channels.');
+      } else {
+        // Hyperswarm transport: classic 6-digit code.
+        console.log(t('pair.code', { code: r.code }));
+        console.log(t('pair.code.hint'));
+        console.log('\nShare this code with your friend over a secure channel.');
+        console.log('When they enter it, both nodes will connect automatically.');
+      }
       return;
     }
-    if (!code) { program.error('Provide a code or use --new'); }
-    console.log(t('pair.redeeming', { code }));
+    if (!arg) { program.error('Provide a code / token or use --new'); }
+
+    const isToken = arg.startsWith('demi-pair1:');
+    const label = isToken ? 'token' : arg;
+    console.log(t('pair.redeeming', { code: label }));
     try {
       // Pair handshake can take up to 5 min — generous CLI timeout
-      const r = await rpc('pair.redeem', { code }, { timeoutMs: 5 * 60 * 1000 });
+      const payload = isToken ? { token: arg } : { code: arg };
+      const r = await rpc('pair.redeem', payload, { timeoutMs: 5 * 60 * 1000 });
       console.log(t('pair.success', { nick: r.peer?.nickname || '?', fp: r.peer?.pubHex?.slice(0, 8) || '?' }));
     } catch (e) {
       console.error(t('pair.failed', { reason: e.message }));
@@ -328,6 +344,144 @@ program.command('review')
     }
 
     await sendAgentTo(peerPubkey, peer, 'review', body);
+  });
+
+// ---------- Signed business-semantics frames (commit-3b, schema v1.1) ----------
+// Shared helper: stamp a signed envelope into the given body. Mutates `body`,
+// adds recipient/nonce/signed_ts + voter/voter_role (or asker/answerer/proposer)
+// where relevant, then attaches `body.sig`. The signed payload is a snapshot of
+// `body` WITHOUT `sig` — receiver rebuilds the same snapshot and verifies.
+//
+// `envType` is the domain-separated envelope type that must match the
+// receiver-side verifier: 'agent-vote' / 'agent-proposal' / 'agent-question' /
+// 'agent-answer'. Only 'agent-vote' currently has a verifier in src/chat.js
+// (verifyVoteSig); the others stamp a signature now and will get verifiers
+// in a follow-up commit, which is fine because the signed fields are already
+// canonical and receivers can compare bit-for-bit.
+async function attachSignature(body, envType, peerPubkey, actorField) {
+  const { loadIdentity, signEnvelope } = await import('../src/identity.js');
+  const crypto = await import('node:crypto');
+  const id = loadIdentity();
+  if (!id) throw new Error('No identity on disk — cannot --sign');
+  if (actorField && !body[actorField]) body[actorField] = id.pubHex;
+  body.recipient = peerPubkey;
+  body.nonce = crypto.randomBytes(16).toString('hex');
+  body.signed_ts = Date.now();
+  const signedPayload = { ...body };
+  body.sig = signEnvelope(id, envType, signedPayload);
+  return body;
+}
+
+program.command('vote')
+  .description('Cast a yes / no / abstain vote on a proposal')
+  .argument('<peer>',   'Peer nickname or pubkey')
+  .argument('<pid>',    'Proposal id (from the proposal frame)')
+  .argument('<choice>', 'yes | no | abstain')
+  .option('--reason <text>',         'Optional rationale')
+  .option('--related-review <sha>',  'Optional sha of a review this vote references')
+  .option('--voter-role <role>',     'Voter role, e.g. security / business / ux')
+  .option('--sign',                  'Attach a signed envelope proving the voter identity')
+  .action(async (peer, pid, choice, opts) => {
+    const cNorm = String(choice).toLowerCase();
+    if (cNorm !== 'yes' && cNorm !== 'no' && cNorm !== 'abstain') {
+      return console.error(`choice must be one of: yes | no | abstain (got ${choice})`);
+    }
+    const peerPubkey = await resolvePeer(peer);
+    const body = {
+      pid,
+      choice: cNorm,
+      reason: opts.reason,
+      related_review: opts.relatedReview,
+      voter_role: opts.voterRole,
+    };
+    for (const k of Object.keys(body)) if (body[k] === undefined) delete body[k];
+    if (opts.sign) {
+      try {
+        await attachSignature(body, 'agent-vote', peerPubkey, 'voter');
+      } catch (e) { return console.error(e.message); }
+    }
+    await sendAgentTo(peerPubkey, peer, 'vote', body);
+  });
+
+program.command('proposal')
+  .description('Send a proposal for voting')
+  .argument('<peer>',  'Peer nickname or pubkey')
+  .argument('<title>', 'Short proposal title')
+  .option('--id <pid>',        'Proposal id (defaults to random 16-hex)')
+  .option('--body <text>',     'Proposal body / details')
+  .option('--cost <level>',    'Cost estimate: S | M | L')
+  .option('--impact <level>',  'Impact estimate: S | M | L')
+  .option('--risk <level>',    'Risk estimate: low | med | high')
+  .option('--escalate',        'Escalate to Dmitry for decision')
+  .option('--sign',            'Attach a signed envelope proving the proposer identity')
+  .action(async (peer, title, opts) => {
+    const crypto = await import('node:crypto');
+    const peerPubkey = await resolvePeer(peer);
+    const pid = opts.id || crypto.randomBytes(8).toString('hex');
+    const normLevel = (v, allowed) => {
+      if (v === undefined) return undefined;
+      const s = String(v).toLowerCase();
+      return allowed.includes(s) ? s : v;
+    };
+    const body = {
+      id: pid,
+      title,
+      body: opts.body,
+      cost: normLevel(opts.cost, ['s', 'm', 'l']),
+      impact: normLevel(opts.impact, ['s', 'm', 'l']),
+      risk: normLevel(opts.risk, ['low', 'med', 'high']),
+      escalate_dmitry: !!opts.escalate,
+    };
+    for (const k of Object.keys(body)) if (body[k] === undefined) delete body[k];
+    if (opts.sign) {
+      try {
+        await attachSignature(body, 'agent-proposal', peerPubkey, 'proposer');
+      } catch (e) { return console.error(e.message); }
+    }
+    await sendAgentTo(peerPubkey, peer, 'proposal', body);
+  });
+
+program.command('question')
+  .description('Ask a structured question (optionally with multiple-choice options)')
+  .argument('<peer>',   'Peer nickname or pubkey')
+  .argument('<prompt>', 'The question text')
+  .option('--id <qid>',        'Question id (defaults to random 16-hex)')
+  .option('--options <csv>',   'Comma-separated answer options, e.g. "a,b,c"')
+  .option('--sign',            'Attach a signed envelope proving the asker identity')
+  .action(async (peer, prompt, opts) => {
+    const crypto = await import('node:crypto');
+    const peerPubkey = await resolvePeer(peer);
+    const qid = opts.id || crypto.randomBytes(8).toString('hex');
+    const options = opts.options
+      ? String(opts.options).split(',').map((s) => s.trim()).filter(Boolean)
+      : undefined;
+    const body = { id: qid, prompt, options };
+    for (const k of Object.keys(body)) if (body[k] === undefined) delete body[k];
+    if (opts.sign) {
+      try {
+        await attachSignature(body, 'agent-question', peerPubkey, 'asker');
+      } catch (e) { return console.error(e.message); }
+    }
+    await sendAgentTo(peerPubkey, peer, 'question', body);
+  });
+
+program.command('answer')
+  .description('Answer a previously-asked question')
+  .argument('<peer>',   'Peer nickname or pubkey')
+  .argument('<qid>',    'Question id being answered')
+  .argument('<choice>', 'Selected option (or free-form short answer)')
+  .option('--reason <text>', 'Optional rationale')
+  .option('--sign',          'Attach a signed envelope proving the answerer identity')
+  .action(async (peer, qid, choice, opts) => {
+    const peerPubkey = await resolvePeer(peer);
+    const body = { qid, choice, reason: opts.reason };
+    for (const k of Object.keys(body)) if (body[k] === undefined) delete body[k];
+    if (opts.sign) {
+      try {
+        await attachSignature(body, 'agent-answer', peerPubkey, 'answerer');
+      } catch (e) { return console.error(e.message); }
+    }
+    await sendAgentTo(peerPubkey, peer, 'answer', body);
   });
 
 program.parse();

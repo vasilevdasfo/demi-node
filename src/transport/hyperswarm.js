@@ -17,6 +17,7 @@ export class Transport {
     this.clubTopic = clubTopic;
     this.onMessage = onMessage || (() => {});
     this.swarm = new Hyperswarm();
+    this.kind = 'hyperswarm';
     // pubkey-hex → socket
     this.sockets = new Map();
     // Pluggable handlers for pair.js and others

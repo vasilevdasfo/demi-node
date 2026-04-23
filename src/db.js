@@ -14,6 +14,25 @@ export function openDb() {
 }
 
 function initSchema() {
+  // Idempotent migration: add last_multiaddr to existing peers table if missing.
+  // libp2p transport (Этап B) stores the remote multiaddr here for reconnect.
+  try {
+    const cols = db.prepare('PRAGMA table_info(peers)').all();
+    if (cols.length && !cols.some((c) => c.name === 'last_multiaddr')) {
+      db.exec('ALTER TABLE peers ADD COLUMN last_multiaddr TEXT');
+    }
+  } catch {}
+
+  // Idempotent migration: add ts_ms (epoch milliseconds) to audit for
+  // millisecond-precision benchmarks + timing-attack detection. Legacy
+  // `ts` column (unix seconds) kept for backward-compat with v1.0 nodes.
+  // New rows write both; old rows have ts_ms=NULL (reader falls back to ts*1000).
+  try {
+    const cols = db.prepare('PRAGMA table_info(audit)').all();
+    if (cols.length && !cols.some((c) => c.name === 'ts_ms')) {
+      db.exec('ALTER TABLE audit ADD COLUMN ts_ms INTEGER');
+    }
+  } catch {}
   db.exec(`
     CREATE TABLE IF NOT EXISTS peers (
       pubkey TEXT PRIMARY KEY,
@@ -25,7 +44,8 @@ function initSchema() {
       last_seen INTEGER,
       online INTEGER DEFAULT 0,
       referred_by TEXT,
-      nick_locked INTEGER DEFAULT 0
+      nick_locked INTEGER DEFAULT 0,
+      last_multiaddr TEXT
     );
 
     CREATE TABLE IF NOT EXISTS messages (
@@ -50,6 +70,7 @@ function initSchema() {
     CREATE TABLE IF NOT EXISTS audit (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       ts INTEGER DEFAULT (strftime('%s', 'now')),
+      ts_ms INTEGER,
       kind TEXT,
       data TEXT
     );
@@ -62,8 +83,8 @@ export function upsertPeer(pubkey, fields) {
   const now = Math.floor(Date.now() / 1000);
   if (!cur) {
     db.prepare(`
-      INSERT INTO peers (pubkey, nickname, self_nickname, fp_short, trust, last_seen, online, referred_by, nick_locked)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO peers (pubkey, nickname, self_nickname, fp_short, trust, last_seen, online, referred_by, nick_locked, last_multiaddr)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       pubkey,
       fields.nickname ?? null,
@@ -73,10 +94,11 @@ export function upsertPeer(pubkey, fields) {
       now,
       fields.online ? 1 : 0,
       fields.referred_by ?? null,
-      fields.nick_locked ? 1 : 0
+      fields.nick_locked ? 1 : 0,
+      fields.last_multiaddr ?? null
     );
   } else {
-    const allowed = ['nickname', 'self_nickname', 'fp_short', 'trust', 'online', 'nick_locked', 'referred_by'];
+    const allowed = ['nickname', 'self_nickname', 'fp_short', 'trust', 'online', 'nick_locked', 'referred_by', 'last_multiaddr'];
     const sets = [];
     const vals = [];
     for (const k of allowed) {
@@ -142,7 +164,11 @@ export function searchMessages(query, limit = 50) {
 }
 
 export function audit(kind, data) {
-  db.prepare('INSERT INTO audit (kind, data) VALUES (?, ?)').run(kind, JSON.stringify(data));
+  // Stamp ts_ms explicitly for millisecond precision. Legacy `ts` column
+  // defaults to unix seconds via the table's DEFAULT — kept for v1.0 compat.
+  db.prepare('INSERT INTO audit (kind, data, ts_ms) VALUES (?, ?, ?)').run(
+    kind, JSON.stringify(data), Date.now(),
+  );
 }
 
 export function closeDb() {

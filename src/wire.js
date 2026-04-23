@@ -12,19 +12,26 @@ export function encode(msg) {
 }
 
 // Streaming line parser — call onLine for each complete line
+//
+// Gemini sv2 SEV-4 (OOM) fix: length check runs BEFORE concat. If a peer
+// streams data without '\n', the previous post-split check was unreachable
+// (while loop only entered after indexOf('\n') >= 0), allowing `buf` to grow
+// unbounded in heap. Move the cap ahead of concat so an attacker who never
+// sends a newline gets the buffer flushed after MAX_FRAME*4 bytes.
 export function makeParser(onLine) {
   let buf = '';
   return (chunk) => {
-    buf += b4a.toString(chunk, 'utf8');
+    const added = b4a.toString(chunk, 'utf8');
+    if (buf.length + added.length > MAX_FRAME * 4) {
+      buf = ''; // flood protection BEFORE concat (unbounded-growth guard)
+      return;
+    }
+    buf += added;
     let idx;
     while ((idx = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, idx);
       buf = buf.slice(idx + 1);
       if (!line.trim()) continue;
-      if (buf.length > MAX_FRAME * 4) {
-        buf = ''; // protection against flood
-        continue;
-      }
       try {
         onLine(JSON.parse(line));
       } catch {
@@ -118,31 +125,80 @@ export function detectInjection(text) {
 // Schema version: every outgoing frame stamps `v: AGENT_SCHEMA_V` so future
 // versions can add fields without breaking older parsers. Incoming frames
 // without `v` are tolerated as v:"1.0" (no behaviour change).
-export const AGENT_SCHEMA_V = '1.0';
+// v1.1 (2026-04-22) — add q/a/proposal/vote to canonical set, add cross-ref fields:
+//   vote.related_review?  — sha of a review whose verdict this vote references
+//   review.implies_vote?  — object { pid, choice, reason? } where choice ∈
+//                           {'yes','no','abstain'}; auto-count this review as a
+//                           vote on the proposal identified by implies_vote.pid
+//                           (review outranks vote when both exist: verdict=approve
+//                           ≡ yes, reject ≡ no). Agreed with Альфа (Q-1 compromise
+//                           variant A, vault letter 22:20 PT) + independently
+//                           validated by Gemini adversarial review on ea16d23.
+//   review.parent_review_sha? — sha of a prior review this one follows up on;
+//                           enables review chains (ack, rebuttal, re-review).
+// All new fields are OPTIONAL; v1.0 peers ignore them → backward-compatible.
+// Newer-version gate: frames claiming v > AGENT_SCHEMA_V are dropped with a
+// __schema_too_new sentinel (see parseAgentFrame below).
+export const AGENT_SCHEMA_V = '1.1';
+
+// semver-style compare ('1.0' < '1.1' < '1.10' < '2.0').
+// Returns positive if a>b, zero if equal, negative if a<b.
+function schemaNewer(a, b) {
+  const pa = String(a).split('.').map(Number);
+  const pb = String(b).split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] || 0, y = pb[i] || 0;
+    if (x !== y) return x - y;
+  }
+  return 0;
+}
 
 export const AGENT_KINDS = new Set([
   'claim',      // { type:'claim', path, ttl, session?, reason?, ts? }
   'release',    // { type:'release', path, session?, ts? }
-  'status',     // { type:'status', task, state, branch?, ts? }
+  'status',     // { type:'status', task, state, branch?, ts?, ref?, progress? }
   'heartbeat',  // { type:'heartbeat', claim, ttl_extend?, ts? }
   'handoff',    // { type:'handoff', branch, from, to, reason?, ts? }
   'conflict',   // { type:'conflict', file, mine_sha?, theirs_sha?, question?, ts? }
-  'review',     // { type:'review', target_sha, target_scope?, verdict, findings[], reviewer?,
-                //   reviewer_role?, sig? } — peer code review between agents. `sig` is a
-                //   signed envelope produced by identity.signEnvelope(id,'agent-review',body)
-                //   over the review body excluding the sig field itself; receivers MAY verify.
+  'question',   // { type:'question', id, prompt, options?, ts? }
+  'answer',     // { type:'answer', qid, choice, reason?, ts? }
+  'proposal',   // { type:'proposal', id, title, body, cost?, impact?, risk?,
+                //   escalate_dmitry?, ts? }
+  'vote',       // { type:'vote', pid, choice, reason?, related_review?, ts? }
+                //   related_review — optional sha of a review this vote references.
+  'review',     // { type:'review', target_sha, target_scope?, verdict, findings[],
+                //   reviewer?, reviewer_role?, implies_vote?, parent_review_sha?, sig?, ts? }
+                //   sig — signed envelope (signEnvelope(id,'agent-review',body))
+                //   implies_vote — object { pid, choice, reason? } where
+                //                  choice ∈ {'yes','no','abstain'}. When set,
+                //                  counts as a vote on proposal `implies_vote.pid`.
+                //                  Runtime invariant: implies_vote.pid MUST be
+                //                  a non-empty string if implies_vote is set.
+                //   parent_review_sha — sha of prior review in a chain (ack/rebuttal).
 ]);
 
 /**
  * Parse a chat.text as an agent RPC frame.
  * Returns the parsed object when `text` is JSON with a recognised `type`,
  * or `null` otherwise. Safe on any input (never throws).
+ *
+ * Version gate (Gemini Finding #2 on ea16d23, sev 4):
+ * Frames claiming a schema version STRICTLY NEWER than AGENT_SCHEMA_V return
+ * a `__schema_too_new` sentinel (not null) so callers can audit and drop
+ * without mistaking the frame for non-agent chat. Frames without `v` are
+ * treated as v1.0 per the backward-compat invariant.
  */
 export function parseAgentFrame(text) {
   if (!text || typeof text !== 'string' || text[0] !== '{') return null;
   try {
     const obj = JSON.parse(text);
-    if (obj && typeof obj === 'object' && AGENT_KINDS.has(obj.type)) return obj;
+    if (!obj || typeof obj !== 'object') return null;
+    // Schema-version gate: drop frames claiming a version we do not speak.
+    if (obj.v && schemaNewer(obj.v, AGENT_SCHEMA_V) > 0) {
+      return { __schema_too_new: true, v: obj.v, type: obj.type };
+    }
+    if (!AGENT_KINDS.has(obj.type)) return null;
+    return obj;
   } catch {}
   return null;
 }

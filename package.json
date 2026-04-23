@@ -16,11 +16,11 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "hyperswarm": "^4.8.0",
     "b4a": "^1.6.4",
-    "ws": "^8.16.0",
+    "better-sqlite3": "^11.0.0",
     "commander": "^12.0.0",
-    "better-sqlite3": "^11.0.0"
+    "hyperswarm": "^4.8.0",
+    "ws": "^8.16.0"
   },
   "license": "MIT",
   "repository": {
@@ -28,5 +28,29 @@
     "url": "https://github.com/vasilevdasfo/demi-node"
   },
   "author": "Dmitrii Vasilev <dima@vda.vc>",
-  "keywords": ["p2p", "ai-agent", "hyperswarm", "dht", "noise", "e2e", "activist", "journalism"]
+  "keywords": [
+    "p2p",
+    "ai-agent",
+    "hyperswarm",
+    "dht",
+    "noise",
+    "e2e",
+    "activist",
+    "journalism"
+  ],
+  "optionalDependencies": {
+    "@chainsafe/libp2p-noise": "^17.0.0",
+    "@chainsafe/libp2p-yamux": "^8.0.1",
+    "@libp2p/bootstrap": "^12.0.18",
+    "@libp2p/crypto": "^5.1.17",
+    "@libp2p/identify": "^4.1.2",
+    "@libp2p/kad-dht": "^16.2.3",
+    "@libp2p/mdns": "^12.0.18",
+    "@libp2p/ping": "^3.1.2",
+    "@libp2p/tcp": "^11.0.17",
+    "@multiformats/multiaddr": "^13.0.1",
+    "it-length-prefixed": "^10.0.1",
+    "libp2p": "^3.2.2",
+    "uint8arrays": "^5.1.1"
+  }
 }

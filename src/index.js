@@ -7,7 +7,7 @@ import { openDb, listPeers, getHistory, upsertPeer } from './db.js';
 import { createTransport } from './transport/index.js';
 import { UiServer } from './ui-server.js';
 import { sendChat, history } from './chat.js';
-import { createPair, redeemPair } from './pair.js';
+import { createPair, redeemPair, ensureLibp2pPairLoaded } from './pair.js';
 import { loadLocale, t } from './i18n.js';
 import fs from 'node:fs';
 
@@ -85,6 +85,12 @@ async function main() {
   await transport.start();
   await transport.rejoinAllKnown();
 
+  // libp2p pair flow needs its module preloaded so createPair() can return
+  // the `token` synchronously to CLI/RPC. No-op on hyperswarm.
+  if (transport.kind === 'libp2p') {
+    await ensureLibp2pPairLoaded();
+  }
+
   // UI + RPC
   const ui = new UiServer({
     port: cfg.uiPort || 4321,
@@ -125,21 +131,26 @@ async function rpc(method, args, ctx) {
     case 'chat.send':
       return sendChat({ transport: ctx.transport, peerPubkey: args.pubkey, text: args.text });
     case 'pair.new': {
-      // Synchronous code, async handshake in background
-      const { code, promise } = createPair({
+      // Synchronous code + optional token, async handshake in background.
+      // libp2p: { code, token, promise }. hyperswarm: { code, promise }.
+      const out = createPair({
         transport: ctx.transport,
         identity: ctx.identity,
         nickname: ctx.nickname,
       });
-      promise.catch((err) => console.error('pair.new background:', err.message));
-      return { code, pending: true };
+      out.promise.catch((err) => console.error('pair.new background:', err.message));
+      const reply = { code: out.code, pending: true };
+      if (out.token) reply.token = out.token;
+      return reply;
     }
     case 'pair.redeem': {
+      // Accepts { code } (hyperswarm) or { token } (libp2p).
       const r = await redeemPair({
         transport: ctx.transport,
         identity: ctx.identity,
         nickname: ctx.nickname,
         code: args.code,
+        token: args.token,
       });
       return r; // { peer: { pubHex, nickname } }
     }
