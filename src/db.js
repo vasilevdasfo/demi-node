@@ -83,8 +83,8 @@ export function upsertPeer(pubkey, fields) {
   const now = Math.floor(Date.now() / 1000);
   if (!cur) {
     db.prepare(`
-      INSERT INTO peers (pubkey, nickname, self_nickname, fp_short, trust, last_seen, online, referred_by, nick_locked, last_multiaddr)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO peers (pubkey, nickname, self_nickname, fp_short, trust, last_seen, online, referred_by, nick_locked)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       pubkey,
       fields.nickname ?? null,
@@ -94,8 +94,7 @@ export function upsertPeer(pubkey, fields) {
       now,
       fields.online ? 1 : 0,
       fields.referred_by ?? null,
-      fields.nick_locked ? 1 : 0,
-      fields.last_multiaddr ?? null
+      fields.nick_locked ? 1 : 0
     );
   } else {
     const allowed = ['nickname', 'self_nickname', 'fp_short', 'trust', 'online', 'nick_locked', 'referred_by', 'last_multiaddr'];
@@ -154,13 +153,116 @@ export function getHistory(pubkey, limit = 100) {
   `).all(pubkey, limit).reverse();
 }
 
-export function searchMessages(query, limit = 50) {
-  return db.prepare(`
-    SELECT m.* FROM messages m
+// searchMessages — FTS5 search with optional peer + date-range filter.
+// Backward-compat: if second arg is a number, treat it as legacy `limit`.
+// New form: searchMessages(query, { limit, peer, range: '1h'|'24h'|'7d'|'all' })
+// Returns rows joined with peer nickname and a short FTS snippet.
+export function searchMessages(query, opts = 50) {
+  if (typeof opts === 'number') opts = { limit: opts };
+  const limit = Math.max(1, Math.min(opts.limit || 50, 500));
+  const peer = opts.peer || null;
+  const range = opts.range || 'all';
+
+  // FTS5 is strict about unbalanced quotes — fall back to a prefix-safe form.
+  let ftsQuery = String(query).trim();
+  if (!ftsQuery) return [];
+  // If user didn't supply FTS operators, split tokens and OR them with prefix match.
+  if (!/["^*:()]/.test(ftsQuery)) {
+    ftsQuery = ftsQuery
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((t) => t.replace(/[^\p{L}\p{N}_-]/gu, '') + '*')
+      .filter((t) => t.length > 1)
+      .join(' OR ');
+  }
+  if (!ftsQuery) return [];
+
+  const where = ['messages_fts MATCH ?'];
+  const params = [ftsQuery];
+
+  if (peer) { where.push('m.pubkey = ?'); params.push(peer); }
+
+  if (range !== 'all') {
+    const now = Date.now();
+    const windowMs =
+      range === '1h'  ? 3_600_000 :
+      range === '24h' ? 86_400_000 :
+      range === '7d'  ? 7 * 86_400_000 : 0;
+    if (windowMs > 0) {
+      const sinceIso = new Date(now - windowMs).toISOString();
+      where.push('m.ts >= ?');
+      params.push(sinceIso);
+    }
+  }
+
+  const sql = `
+    SELECT m.id, m.pubkey, m.direction, m.ts, m.text, m.flagged,
+           p.nickname AS nickname, p.self_nickname AS self_nickname, p.fp_short AS fp_short,
+           snippet(messages_fts, 0, '[[', ']]', '…', 12) AS snippet
+    FROM messages m
     JOIN messages_fts fts ON fts.rowid = m.id
-    WHERE messages_fts MATCH ?
+    LEFT JOIN peers p ON p.pubkey = m.pubkey
+    WHERE ${where.join(' AND ')}
     ORDER BY m.ts DESC LIMIT ?
-  `).all(query, limit);
+  `;
+  params.push(limit);
+
+  try {
+    return db.prepare(sql).all(...params);
+  } catch (e) {
+    // Broken FTS query — surface empty rather than throwing so UI stays responsive.
+    return [];
+  }
+}
+
+// Aggregated peer profile: peers row + send/recv counts + recent pair.* audit events.
+// Used by Observer UI "Profile" panel. Returns null for unknown pubkey.
+export function getPeerProfile(pubkey) {
+  if (!pubkey || typeof pubkey !== 'string') return null;
+  const peer = db.prepare('SELECT * FROM peers WHERE pubkey = ?').get(pubkey);
+  if (!peer) return null;
+
+  const counts = db.prepare(`
+    SELECT
+      SUM(CASE WHEN direction = 'out' THEN 1 ELSE 0 END) AS sent,
+      SUM(CASE WHEN direction = 'in'  THEN 1 ELSE 0 END) AS received,
+      MIN(ts) AS first_msg_ts, MAX(ts) AS last_msg_ts
+    FROM messages WHERE pubkey = ?
+  `).get(pubkey) || {};
+
+  // Pull pair audit events that mention this peer. We store `data` as JSON text;
+  // a LIKE on the pubkey substring is cheap (no index) but handful for alpha.
+  let pairEvents = [];
+  try {
+    const rows = db.prepare(`
+      SELECT id, ts, ts_ms, kind, data FROM audit
+      WHERE kind LIKE 'pair.%'
+        AND (data LIKE ? OR data LIKE ?)
+      ORDER BY COALESCE(ts_ms, ts * 1000) DESC
+      LIMIT 20
+    `).all('%' + pubkey + '%', '%' + (peer.fp_short || '__none__') + '%');
+    pairEvents = rows.map((r) => {
+      let parsed = null;
+      try { parsed = JSON.parse(r.data); } catch {}
+      return {
+        id: r.id,
+        kind: r.kind,
+        ts_ms: r.ts_ms || (r.ts ? r.ts * 1000 : null),
+        data: parsed,
+      };
+    });
+  } catch {}
+
+  return {
+    peer,
+    counts: {
+      sent: counts.sent || 0,
+      received: counts.received || 0,
+      first_msg_ts: counts.first_msg_ts || null,
+      last_msg_ts: counts.last_msg_ts || null,
+    },
+    pairEvents,
+  };
 }
 
 export function audit(kind, data) {

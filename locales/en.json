@@ -31,5 +31,25 @@
   "wipe.cancelled": "Cancelled.",
 
   "danger.nfa": "Not financial advice. DEMI tokens are utility for club access, not securities.",
-  "danger.activist": "DEMI is a v0.1 MVP. For life-safety scenarios combine with Signal, Tor, and operational security practices."
+  "danger.activist": "DEMI is a v0.1 MVP. For life-safety scenarios combine with Signal, Tor, and operational security practices.",
+
+  "ui.search.placeholder": "Search history…",
+  "ui.search.allpeers": "All peers",
+  "ui.search.empty": "Nothing found",
+  "ui.profile": "Profile",
+  "ui.export.md": "Export MD",
+  "ui.export.json": "Export JSON",
+
+  "profile.nickname": "Nickname",
+  "profile.trust": "Trust",
+  "profile.fpShort": "Fingerprint",
+  "profile.pubkey": "Pubkey",
+  "profile.firstSeen": "First seen",
+  "profile.lastSeen": "Last seen",
+  "profile.sent": "Sent",
+  "profile.received": "Received",
+  "profile.pairHistory": "Pair history",
+  "profile.copy": "Copy pubkey",
+  "profile.goChat": "Message",
+  "profile.copied": "Copied"
 }

@@ -31,5 +31,25 @@
   "wipe.cancelled": "Отменено.",
 
   "danger.nfa": "Не является финансовым советом. DEMI-токены — это utility для доступа к клубу, не ценная бумага.",
-  "danger.activist": "DEMI — это v0.1 MVP. Для задач безопасности жизни комбинируй с Signal, Tor и правилами оперативной безопасности."
+  "danger.activist": "DEMI — это v0.1 MVP. Для задач безопасности жизни комбинируй с Signal, Tor и правилами оперативной безопасности.",
+
+  "ui.search.placeholder": "Поиск в истории…",
+  "ui.search.allpeers": "Все пиры",
+  "ui.search.empty": "Ничего не найдено",
+  "ui.profile": "Профиль",
+  "ui.export.md": "Экспорт MD",
+  "ui.export.json": "Экспорт JSON",
+
+  "profile.nickname": "Никнейм",
+  "profile.trust": "Доверие",
+  "profile.fpShort": "Отпечаток",
+  "profile.pubkey": "Pubkey",
+  "profile.firstSeen": "Впервые",
+  "profile.lastSeen": "Последний раз",
+  "profile.sent": "Отправлено",
+  "profile.received": "Получено",
+  "profile.pairHistory": "История спаривания",
+  "profile.copy": "Копировать pubkey",
+  "profile.goChat": "Написать",
+  "profile.copied": "Скопировано"
 }

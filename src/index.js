@@ -3,11 +3,11 @@
 import { ensureHome, paths, loadConfig, touchActive, touchLastSeen } from './paths.js';
 import { loadIdentity, generateIdentity, panicWipe, fingerprint } from './identity.js';
 import { getOrCreateNickname } from './nickname.js';
-import { openDb, listPeers, getHistory, upsertPeer } from './db.js';
+import { openDb, listPeers, getHistory, upsertPeer, getPeer, searchMessages, getPeerProfile } from './db.js';
 import { createTransport } from './transport/index.js';
 import { UiServer } from './ui-server.js';
 import { sendChat, history } from './chat.js';
-import { createPair, redeemPair, ensureLibp2pPairLoaded } from './pair.js';
+import { createPair, redeemPair } from './pair.js';
 import { loadLocale, t } from './i18n.js';
 import fs from 'node:fs';
 
@@ -85,12 +85,6 @@ async function main() {
   await transport.start();
   await transport.rejoinAllKnown();
 
-  // libp2p pair flow needs its module preloaded so createPair() can return
-  // the `token` synchronously to CLI/RPC. No-op on hyperswarm.
-  if (transport.kind === 'libp2p') {
-    await ensureLibp2pPairLoaded();
-  }
-
   // UI + RPC
   const ui = new UiServer({
     port: cfg.uiPort || 4321,
@@ -128,29 +122,37 @@ async function rpc(method, args, ctx) {
     case 'peers.history':
     case 'chat.history':
       return history(args.pubkey, args.limit || 100);
+    case 'peers.getProfile':
+      return getPeerProfile(args.pubkey);
     case 'chat.send':
       return sendChat({ transport: ctx.transport, peerPubkey: args.pubkey, text: args.text });
+    case 'chat.search': {
+      const q = String(args.query || '').trim();
+      if (!q) return [];
+      const range = args.range || 'all';
+      const peerFilter = args.pubkey || null;
+      return searchMessages(q, {
+        limit: Math.min(args.limit || 50, 200),
+        peer: peerFilter,
+        range,
+      });
+    }
     case 'pair.new': {
-      // Synchronous code + optional token, async handshake in background.
-      // libp2p: { code, token, promise }. hyperswarm: { code, promise }.
-      const out = createPair({
+      // Synchronous code, async handshake in background
+      const { code, promise } = createPair({
         transport: ctx.transport,
         identity: ctx.identity,
         nickname: ctx.nickname,
       });
-      out.promise.catch((err) => console.error('pair.new background:', err.message));
-      const reply = { code: out.code, pending: true };
-      if (out.token) reply.token = out.token;
-      return reply;
+      promise.catch((err) => console.error('pair.new background:', err.message));
+      return { code, pending: true };
     }
     case 'pair.redeem': {
-      // Accepts { code } (hyperswarm) or { token } (libp2p).
       const r = await redeemPair({
         transport: ctx.transport,
         identity: ctx.identity,
         nickname: ctx.nickname,
         code: args.code,
-        token: args.token,
       });
       return r; // { peer: { pubHex, nickname } }
     }

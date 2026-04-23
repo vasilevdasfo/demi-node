@@ -18,6 +18,33 @@ const I18N = {
     'ui.pubkey': 'Pubkey',
     'ui.fp': 'Fingerprint',
     'ui.wipe': 'Panic Wipe',
+    'ui.profile': 'Профиль',
+    'ui.export.md': '⇩ MD',
+    'ui.export.json': '⇩ JSON',
+    'ui.search.placeholder': 'Поиск в истории…',
+    'ui.search.allpeers': 'Все пиры',
+    'ui.search.range.all': 'Всё время',
+    'ui.search.range.1h': '1 час',
+    'ui.search.range.24h': '24 часа',
+    'ui.search.range.7d': '7 дней',
+    'ui.search.go': 'Найти',
+    'ui.search.clear': '✕',
+    'ui.search.empty': 'Ничего не найдено',
+    'profile.nickname': 'Никнейм',
+    'profile.trust': 'Доверие',
+    'profile.fpShort': 'Отпечаток',
+    'profile.pubkey': 'Pubkey',
+    'profile.firstSeen': 'Впервые',
+    'profile.lastSeen': 'Последний раз',
+    'profile.sent': 'Отправлено',
+    'profile.received': 'Получено',
+    'profile.pairHistory': 'История спаривания',
+    'profile.noPair': 'Нет событий',
+    'profile.copy': 'Копировать pubkey',
+    'profile.goChat': 'Написать',
+    'profile.copied': 'Скопировано',
+    'profile.exportMd': 'Экспорт MD',
+    'profile.exportJson': 'Экспорт JSON',
     'danger.activist': 'DEMI — v0.1 MVP. Для задач безопасности жизни комбинируй с Signal, Tor и оперсек-практиками.',
     'wipe.confirm': 'Panic Wipe удалит ключ, сообщения и контакты БЕЗВОЗВРАТНО. Напиши YES:',
     'pair.code.title': 'Твой код партнёра (действует 10 минут):',
@@ -67,6 +94,33 @@ const I18N = {
     'ui.pubkey': 'Pubkey',
     'ui.fp': 'Fingerprint',
     'ui.wipe': 'Panic Wipe',
+    'ui.profile': 'Profile',
+    'ui.export.md': '⇩ MD',
+    'ui.export.json': '⇩ JSON',
+    'ui.search.placeholder': 'Search history…',
+    'ui.search.allpeers': 'All peers',
+    'ui.search.range.all': 'All time',
+    'ui.search.range.1h': '1 hour',
+    'ui.search.range.24h': '24 hours',
+    'ui.search.range.7d': '7 days',
+    'ui.search.go': 'Find',
+    'ui.search.clear': '✕',
+    'ui.search.empty': 'Nothing found',
+    'profile.nickname': 'Nickname',
+    'profile.trust': 'Trust',
+    'profile.fpShort': 'Fingerprint',
+    'profile.pubkey': 'Pubkey',
+    'profile.firstSeen': 'First seen',
+    'profile.lastSeen': 'Last seen',
+    'profile.sent': 'Sent',
+    'profile.received': 'Received',
+    'profile.pairHistory': 'Pair history',
+    'profile.noPair': 'No events',
+    'profile.copy': 'Copy pubkey',
+    'profile.goChat': 'Message',
+    'profile.copied': 'Copied',
+    'profile.exportMd': 'Export MD',
+    'profile.exportJson': 'Export JSON',
     'danger.activist': 'DEMI — v0.1 MVP. For life-safety scenarios combine with Signal, Tor and op-sec practices.',
     'wipe.confirm': 'Panic Wipe will irreversibly delete key, messages and contacts. Type YES:',
     'pair.code.title': 'Your pairing code (valid for 10 minutes):',
@@ -115,8 +169,19 @@ function applyI18n() {
     const key = el.getAttribute('data-i18n');
     el.textContent = t(key);
   });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach((el) => {
+    el.setAttribute('placeholder', t(el.getAttribute('data-i18n-placeholder')));
+  });
   const input = document.getElementById('chat-input');
   if (input) input.placeholder = t('chat.placeholder');
+  const searchInput = document.getElementById('search-input');
+  if (searchInput) searchInput.placeholder = t('ui.search.placeholder');
+}
+
+// ---------- theme ----------
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('demi.theme', theme);
 }
 
 // ---------- RPC client ----------
@@ -165,6 +230,8 @@ const state = {
   peers: [],
   currentPeer: null,
   currentPeerNick: null,
+  searchMode: false,
+  profileMode: false,
   agents: { claims: new Map(), statuses: new Map(), heartbeats: new Map(), events: [] },
 };
 
@@ -192,11 +259,22 @@ function renderPeers() {
       <span class="nick">${escapeHtml(name)}</span>
       <span class="fp">${p.fp_short || ''}</span>
       <span class="trust">${trust}</span>`;
-    li.addEventListener('click', () => selectPeer(p.pubkey));
+    li.addEventListener('click', () => { selectPeer(p.pubkey); closeDrawer(); });
     ul.appendChild(li);
   }
   if (!others.length) {
     ul.innerHTML = '<li class="empty">—</li>';
+  }
+  // also populate search peer dropdown
+  const sel = document.getElementById('search-peer');
+  if (sel) {
+    const cur = sel.value;
+    sel.innerHTML = `<option value="">— ${t('ui.search.allpeers')} —</option>` +
+      others.map((p) => {
+        const nm = p.nickname || p.self_nickname || p.fp_short || p.pubkey.slice(0, 10);
+        return `<option value="${escapeHtml(p.pubkey)}">${escapeHtml(nm)}</option>`;
+      }).join('');
+    if (cur) sel.value = cur;
   }
 }
 
@@ -228,6 +306,8 @@ async function renderChat() {
     document.getElementById('chat-fp').textContent = '';
     document.getElementById('chat-input').disabled = true;
     document.querySelector('#chat-form button').disabled = true;
+    const actions = document.getElementById('chat-head-actions');
+    if (actions) actions.style.visibility = 'hidden';
     return;
   }
   const peer = state.peers.find((p) => p.pubkey === state.currentPeer);
@@ -235,6 +315,8 @@ async function renderChat() {
   document.getElementById('chat-fp').textContent = peer?.fp_short || '';
   document.getElementById('chat-input').disabled = false;
   document.querySelector('#chat-form button').disabled = false;
+  const actions = document.getElementById('chat-head-actions');
+  if (actions) actions.style.visibility = 'visible';
   state.currentPeerNick = peer?.nickname || peer?.self_nickname || 'peer';
   const msgs = await rpc('peers.history', { pubkey: state.currentPeer, limit: 200 });
   for (const m of msgs) appendMsg(m);
@@ -246,9 +328,16 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// Highlight FTS snippet [[term]] markers → <mark>
+function renderSnippet(snippet) {
+  if (!snippet) return '';
+  const safe = escapeHtml(snippet);
+  return safe
+    .replace(/\[\[/g, '<mark>')
+    .replace(/\]\]/g, '</mark>');
+}
+
 // ---------- agent dashboard ----------
-// Parses chat frames as structured agent RPC when they look like JSON.
-// Kinds: claim, release, status, heartbeat, handoff, conflict.
 const AGENT_KINDS = new Set(['claim', 'release', 'status', 'heartbeat', 'handoff', 'conflict', 'question', 'answer', 'proposal', 'vote']);
 
 function tryParseAgentFrame(text) {
@@ -260,19 +349,12 @@ function tryParseAgentFrame(text) {
   return null;
 }
 
-// Reduce history → current agent state for the selected peer.
 function computeAgentState(msgs) {
-  // path -> { frame, peerNick, msgTs }  (most recent claim wins; release clears)
   const claims = new Map();
-  // task -> { state, branch, progress, msgTs, peerNick }
   const statuses = new Map();
-  // path -> lastHeartbeatMs
   const heartbeats = new Map();
-  // id -> { frame, peerNick, msgTs, answered }
   const questions = new Map();
-  // id -> { frame, peerNick, msgTs, votes: {yes,no,abstain} }
   const proposals = new Map();
-  // transient events for the timeline (last 10)
   const events = [];
 
   for (const m of msgs) {
@@ -389,12 +471,11 @@ function renderAgents() {
   const activeClaims = [];
   for (const [path, rec] of claims) {
     const ttlMs = (rec.frame.ttl || 0) * 1000;
-    const expiresAt = rec.msgTs + ttlMs;
     const hb = heartbeats.get(path);
     const lastActivity = hb ? Math.max(hb, rec.msgTs) : rec.msgTs;
     const effectiveExpiry = lastActivity + ttlMs;
     const remaining = effectiveExpiry - now;
-    if (remaining <= 0 && ttlMs > 0) continue; // drop expired
+    if (remaining <= 0 && ttlMs > 0) continue;
     activeClaims.push({ path, rec, remaining, ttlMs });
   }
   activeClaims.sort((a, b) => b.remaining - a.remaining);
@@ -420,7 +501,6 @@ function renderAgents() {
     claimsUl.appendChild(li);
   }
 
-  // ---- Negotiation column: open questions + open proposals ----
   qapvUl.innerHTML = '';
   const openQuestions = [...(questions || new Map()).entries()]
     .filter(([, q]) => !q.answered)
@@ -484,7 +564,6 @@ function renderAgents() {
     qapvUl.appendChild(li);
   }
 
-  // Wire buttons: send answer / vote via chat.send
   qapvUl.querySelectorAll('.qapv-opt').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const qid = btn.dataset.qid;
@@ -533,6 +612,9 @@ function renderAgents() {
 // ---------- actions ----------
 async function selectPeer(pubkey) {
   state.currentPeer = pubkey;
+  state.searchMode = false;
+  document.getElementById('search-results').classList.add('hidden');
+  document.getElementById('chat-log').style.display = '';
   renderPeers();
   await renderChat();
 }
@@ -556,6 +638,231 @@ async function bootstrap() {
   await refreshHealth();
 }
 
+// ---------- search ----------
+async function runSearch() {
+  const q = document.getElementById('search-input').value.trim();
+  if (!q) { clearSearch(); return; }
+  const pubkey = document.getElementById('search-peer').value || null;
+  const range = document.getElementById('search-range').value || 'all';
+  let rows = [];
+  try {
+    rows = await rpc('chat.search', { query: q, pubkey, range, limit: 100 });
+  } catch (e) {
+    toast('Search failed: ' + e.message);
+    return;
+  }
+  renderSearchResults(rows);
+  document.getElementById('btn-search-clear').style.display = '';
+}
+
+function clearSearch() {
+  state.searchMode = false;
+  document.getElementById('search-input').value = '';
+  document.getElementById('search-results').classList.add('hidden');
+  document.getElementById('chat-log').style.display = '';
+  document.getElementById('btn-search-clear').style.display = 'none';
+}
+
+function renderSearchResults(rows) {
+  state.searchMode = true;
+  const log = document.getElementById('chat-log');
+  const ul = document.getElementById('search-results');
+  log.style.display = 'none';
+  ul.classList.remove('hidden');
+  ul.innerHTML = '';
+  if (!rows.length) {
+    const li = document.createElement('li');
+    li.className = 'search-empty';
+    li.textContent = t('ui.search.empty');
+    ul.appendChild(li);
+    return;
+  }
+  for (const r of rows) {
+    const li = document.createElement('li');
+    li.className = 'search-result';
+    const nick = r.nickname || r.self_nickname || r.fp_short || r.pubkey?.slice(0, 10) || '?';
+    const dir = r.direction === 'out' ? '→' : '←';
+    const ts = (r.ts || '').replace('T', ' ').slice(0, 19);
+    li.innerHTML = `
+      <div class="sr-head">
+        <span><span class="sr-nick">${escapeHtml(nick)}</span> ${dir}</span>
+        <span>${escapeHtml(ts)}</span>
+      </div>
+      <div class="sr-text">${renderSnippet(r.snippet || r.text)}</div>
+    `;
+    li.addEventListener('click', async () => {
+      await selectPeer(r.pubkey);
+    });
+    ul.appendChild(li);
+  }
+}
+
+// ---------- export ----------
+function exportMarkdown(peer, msgs) {
+  const nick = peer.nickname || peer.self_nickname || peer.fp_short || peer.pubkey.slice(0, 10);
+  const lines = [
+    `# Chat with ${nick}`,
+    '',
+    `- pubkey: \`${peer.pubkey}\``,
+    `- fingerprint: \`${peer.fp_short || ''}\``,
+    `- trust: ${peer.trust || 'unknown'}`,
+    `- exported: ${new Date().toISOString()}`,
+    `- messages: ${msgs.length}`,
+    '',
+    '---',
+    '',
+  ];
+  for (const m of msgs) {
+    const who = m.direction === 'out' ? (state.me?.nickname || 'me') : nick;
+    const ts = (m.ts || '').replace('T', ' ').slice(0, 19);
+    const text = (m.text || '').replace(/\r?\n/g, '\n> ');
+    lines.push(`**${who}** · _${ts}_${m.flagged ? ' · ⚠ flagged' : ''}`);
+    lines.push('');
+    lines.push('> ' + text);
+    lines.push('');
+  }
+  return lines.join('\n');
+}
+
+function download(name, text, mime) {
+  const blob = new Blob([text], { type: mime + ';charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 500);
+}
+
+async function doExport(fmt) {
+  if (!state.currentPeer) return;
+  const peer = state.peers.find((p) => p.pubkey === state.currentPeer);
+  if (!peer) return;
+  const msgs = await rpc('peers.history', { pubkey: state.currentPeer, limit: 5000 });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const baseName = `demi-chat-${peer.fp_short || peer.pubkey.slice(0, 8)}-${stamp}`;
+  if (fmt === 'md') {
+    download(baseName + '.md', exportMarkdown(peer, msgs), 'text/markdown');
+  } else {
+    const payload = {
+      exported_at: new Date().toISOString(),
+      me: state.me,
+      peer,
+      messages: msgs,
+    };
+    download(baseName + '.json', JSON.stringify(payload, null, 2), 'application/json');
+  }
+  toast(`⇩ ${baseName}.${fmt}`);
+}
+
+// ---------- profile view ----------
+async function openProfile() {
+  if (!state.currentPeer) return;
+  let prof;
+  try { prof = await rpc('peers.getProfile', { pubkey: state.currentPeer }); }
+  catch (e) { toast('Profile failed: ' + e.message); return; }
+  if (!prof) { toast('No profile'); return; }
+  renderProfile(prof);
+  document.getElementById('health-view').classList.add('hidden');
+  document.getElementById('profile-view').classList.remove('hidden');
+  state.profileMode = true;
+  openPanelDrawer();
+}
+
+function closeProfile() {
+  document.getElementById('profile-view').classList.add('hidden');
+  document.getElementById('health-view').classList.remove('hidden');
+  state.profileMode = false;
+}
+
+function fmtDate(v) {
+  if (!v) return '—';
+  // Accept either unix seconds (number) or ISO string
+  const d = typeof v === 'number' ? new Date(v * 1000) : new Date(v);
+  if (isNaN(d.getTime())) return '—';
+  return d.toISOString().replace('T', ' ').slice(0, 19);
+}
+
+function renderProfile(prof) {
+  const { peer, counts, pairEvents } = prof;
+  const nick = peer.nickname || peer.self_nickname || '(no nick)';
+  const body = document.getElementById('profile-body');
+  body.innerHTML = `
+    <div class="profile-row"><span class="label">${t('profile.nickname')}</span><span class="value big">${escapeHtml(nick)}</span></div>
+    <div class="profile-row"><span class="label">${t('profile.trust')}</span><span class="value">${escapeHtml(peer.trust || '—')}</span></div>
+    <div class="profile-row"><span class="label">${t('profile.fpShort')}</span><span class="value">${escapeHtml(peer.fp_short || '—')}</span></div>
+    <div class="profile-row"><span class="label">${t('profile.pubkey')}</span></div>
+    <div class="profile-pubkey" id="profile-pubkey-val">${escapeHtml(peer.pubkey)}</div>
+    <div class="profile-actions">
+      <button class="btn btn-ghost" id="btn-copy-pubkey">${t('profile.copy')}</button>
+      <button class="btn-gold" id="btn-goto-chat">${t('profile.goChat')}</button>
+      <button class="btn btn-ghost" id="btn-prof-export-md">${t('profile.exportMd')}</button>
+      <button class="btn btn-ghost" id="btn-prof-export-json">${t('profile.exportJson')}</button>
+    </div>
+    <div class="profile-counts">
+      <div class="count-cell">
+        <div class="count-num">${counts.sent}</div>
+        <div class="count-lbl">${t('profile.sent')}</div>
+      </div>
+      <div class="count-cell">
+        <div class="count-num">${counts.received}</div>
+        <div class="count-lbl">${t('profile.received')}</div>
+      </div>
+    </div>
+    <div class="profile-row"><span class="label">${t('profile.firstSeen')}</span><span class="value">${escapeHtml(fmtDate(peer.first_seen))}</span></div>
+    <div class="profile-row"><span class="label">${t('profile.lastSeen')}</span><span class="value">${escapeHtml(fmtDate(peer.last_seen))}</span></div>
+    <div class="profile-row"><span class="label">${t('profile.pairHistory')}</span></div>
+    <ul class="profile-pairs" id="profile-pair-list"></ul>
+  `;
+  const pairUl = document.getElementById('profile-pair-list');
+  if (!pairEvents || !pairEvents.length) {
+    pairUl.innerHTML = `<li>${t('profile.noPair')}</li>`;
+  } else {
+    for (const ev of pairEvents) {
+      const li = document.createElement('li');
+      const when = fmtDate(ev.ts_ms ? ev.ts_ms / 1000 : null);
+      li.innerHTML = `<span class="p-kind">${escapeHtml(ev.kind)}</span> · ${escapeHtml(when)}`;
+      pairUl.appendChild(li);
+    }
+  }
+  document.getElementById('btn-copy-pubkey').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(peer.pubkey); toast(t('profile.copied')); }
+    catch { /* fallback: selectable text */ }
+  });
+  document.getElementById('btn-goto-chat').addEventListener('click', () => {
+    closeProfile();
+    const log = document.getElementById('chat-log');
+    if (log) log.scrollTop = log.scrollHeight;
+    document.getElementById('chat-input')?.focus();
+  });
+  document.getElementById('btn-prof-export-md').addEventListener('click', () => doExport('md'));
+  document.getElementById('btn-prof-export-json').addEventListener('click', () => doExport('json'));
+}
+
+// ---------- toast ----------
+let toastTimer;
+function toast(msg) {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.remove('hidden');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.add('hidden'), 2200);
+}
+
+// ---------- drawer (mobile) ----------
+function toggleDrawer() {
+  document.getElementById('peers-aside')?.classList.toggle('open');
+}
+function closeDrawer() {
+  document.getElementById('peers-aside')?.classList.remove('open');
+  document.getElementById('panel-aside')?.classList.remove('open');
+}
+function openPanelDrawer() {
+  if (window.innerWidth <= 720) {
+    document.getElementById('panel-aside')?.classList.add('open');
+  }
+}
+
 // ---------- events ----------
 document.getElementById('lang').value = LANG;
 document.getElementById('lang').addEventListener('change', (e) => {
@@ -565,6 +872,17 @@ document.getElementById('lang').addEventListener('change', (e) => {
   renderPeers();
   renderChat();
 });
+
+// Theme toggle
+const savedTheme = localStorage.getItem('demi.theme') || 'dark';
+applyTheme(savedTheme);
+document.getElementById('btn-theme').addEventListener('click', () => {
+  const cur = document.documentElement.getAttribute('data-theme') || 'dark';
+  applyTheme(cur === 'dark' ? 'light' : 'dark');
+});
+
+// Mobile drawer
+document.getElementById('btn-drawer')?.addEventListener('click', toggleDrawer);
 
 document.getElementById('btn-pair-new').addEventListener('click', async () => {
   const r = await rpc('pair.new');
@@ -624,6 +942,20 @@ document.getElementById('dlg-wipe').addEventListener('close', async (e) => {
   }
 });
 
+// Search
+document.getElementById('btn-search').addEventListener('click', runSearch);
+document.getElementById('btn-search-clear').addEventListener('click', clearSearch);
+document.getElementById('search-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); runSearch(); }
+  if (e.key === 'Escape') clearSearch();
+});
+
+// Export + Profile
+document.getElementById('btn-export-md').addEventListener('click', () => doExport('md'));
+document.getElementById('btn-export-json').addEventListener('click', () => doExport('json'));
+document.getElementById('btn-profile').addEventListener('click', openProfile);
+document.getElementById('btn-profile-close').addEventListener('click', closeProfile);
+
 // ---------- init ----------
 applyI18n();
 ensureAgentsPanel();
@@ -631,9 +963,8 @@ renderAgents();
 openWs().then(bootstrap);
 setInterval(refreshPeers, 10_000);
 setInterval(refreshHealth, 5_000);
-// Live refresh of agents panel (re-read current peer's history every 8s).
-// Cheap until MID-finish adds WS push; good enough for dashboard.
 setInterval(async () => {
+  if (state.searchMode || state.profileMode) return;
   if (!state.currentPeer) { renderAgents(); return; }
   try {
     const msgs = await rpc('peers.history', { pubkey: state.currentPeer, limit: 200 });
