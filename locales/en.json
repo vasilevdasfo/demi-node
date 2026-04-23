@@ -11,7 +11,7 @@
 
   "pair.creating": "Generating pairing code...",
   "pair.code": "Your pairing code: {code}",
-  "pair.code.hint": "Code expires in 5 minutes. Share it over a secure channel.",
+  "pair.code.hint": "Code expires in 10 minutes. Share it over a secure channel.",
   "pair.redeeming": "Connecting using code {code}...",
   "pair.success": "Paired with {nick} ({fp}). Trust: trusted.",
   "pair.timeout": "Pairing timed out. Generate a new code.",

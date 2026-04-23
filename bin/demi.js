@@ -75,39 +75,23 @@ program.command('peers')
   });
 
 program.command('pair')
-  .description('Create or redeem a pairing code / token')
-  .option('--new', 'Create new pairing code (and token, on libp2p transport)')
-  .argument('[arg]', 'Pairing code (hyperswarm) or token "demi-pair1:..." (libp2p)')
-  .action(async (arg, opts) => {
+  .description('Create or redeem pairing code')
+  .option('--new', 'Create new pairing code')
+  .argument('[code]', 'Pairing code to redeem, e.g. 384-921')
+  .action(async (code, opts) => {
     if (opts.new) {
       const r = await rpc('pair.new');
-      if (r.token) {
-        // libp2p transport: token is the only safe way to redeem.
-        console.log('Pair token (copy-paste to peer over a trusted channel):');
-        console.log('');
-        console.log(r.token);
-        console.log('');
-        console.log(`Short reference code: ${r.code} (matches the token's embedded code)`);
-        console.log('');
-        console.log('Treat the token as a one-time-use secret. Share via DM, not public channels.');
-      } else {
-        // Hyperswarm transport: classic 6-digit code.
-        console.log(t('pair.code', { code: r.code }));
-        console.log(t('pair.code.hint'));
-        console.log('\nShare this code with your friend over a secure channel.');
-        console.log('When they enter it, both nodes will connect automatically.');
-      }
+      console.log(t('pair.code', { code: r.code }));
+      console.log(t('pair.code.hint'));
+      console.log('\nShare this code with your friend over a secure channel.');
+      console.log('When they enter it, both nodes will connect automatically.');
       return;
     }
-    if (!arg) { program.error('Provide a code / token or use --new'); }
-
-    const isToken = arg.startsWith('demi-pair1:');
-    const label = isToken ? 'token' : arg;
-    console.log(t('pair.redeeming', { code: label }));
+    if (!code) { program.error('Provide a code or use --new'); }
+    console.log(t('pair.redeeming', { code }));
     try {
-      // Pair handshake can take up to 5 min — generous CLI timeout
-      const payload = isToken ? { token: arg } : { code: arg };
-      const r = await rpc('pair.redeem', payload, { timeoutMs: 5 * 60 * 1000 });
+      // Pair handshake can take up to 10 min — generous CLI timeout
+      const r = await rpc('pair.redeem', { code }, { timeoutMs: 10 * 60 * 1000 });
       console.log(t('pair.success', { nick: r.peer?.nickname || '?', fp: r.peer?.pubHex?.slice(0, 8) || '?' }));
     } catch (e) {
       console.error(t('pair.failed', { reason: e.message }));

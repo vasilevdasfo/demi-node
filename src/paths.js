@@ -39,7 +39,7 @@ export function loadConfig() {
       lang: process.env.LANG?.slice(0, 2) || 'en',
       torMode: false,
       clubTopic: 'demi-club/v1',
-      pairTtlMs: 5 * 60 * 1000,
+      pairTtlMs: 10 * 60 * 1000,
       deadManDays: 30,
       referredBy: null,
     };

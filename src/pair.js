@@ -1,25 +1,21 @@
-// src/pair.js — pair-code / pair-token dispatcher (Этап B v0.2.1).
-//
-// 6-digit code → transport-specific rendezvous:
-//   - Hyperswarm: DHT topic rendezvous (src/hyperswarm-pair.js)
-//     Shape: createPair → { code, promise }, redeemPair(code) → { peer }.
-//   - libp2p:     peer-bootstrap direct-dial (src/libp2p-pair.js)
-//     Shape: createPair → { code, token, promise }, redeemPair(token) → { peer }.
-//
-// The libp2p branch REQUIRES a full token for redeem because the 6-digit code
-// alone does NOT identify the creator (no public rendezvous exists). The
-// token carries peerId + multiaddrs + creator's identity pubHex.
-//
-// Hyperswarm branch is unchanged.
+// src/pair.js — 6-digit pairing code → DHT topic → mutual pubkey exchange
+// Flow:
+// 1. Alice creates code NNN-NNN → topic = sha256('demi-pair/v1:' + NNNNNN)
+// 2. Alice joins swarm on topic + registers pair-ack handler on transport
+// 3. Alice broadcasts her signed pair-ack over all current sockets (incl. club topic sockets)
+// 4. Bob redeems same code, joins topic, broadcasts his pair-ack
+// 5. Both verify envelope (binds to code), attach socket under identity pubkey,
+//    re-broadcast own ack (so the other side completes its half of the handshake),
+//    join permanent sorted-pair topic for future reconnects.
 
 import crypto from 'node:crypto';
 import b4a from 'b4a';
-import { audit } from './db.js';
-
-// ─── shared helpers (imported by both pair-flow impls + transport) ──────────
+import { signEnvelope, verifyEnvelope } from './identity.js';
+import { encode, pairAckFrame } from './wire.js';
+import { upsertPeer, audit } from './db.js';
 
 export function generatePairCode() {
-  // 6 digits, grouped as NNN-NNN (first digit 1–9 to avoid leading-zero confusion)
+  // 6 digits, grouped as NNN-NNN (no 0 at start to avoid leading-zero confusion)
   const n = 100_000 + crypto.randomInt(900_000);
   const s = String(n);
   return `${s.slice(0, 3)}-${s.slice(3)}`;
@@ -35,132 +31,97 @@ export function sortedPairTopic(pkA, pkB) {
   return crypto.createHash('sha256').update('demi-pair-perm/v1:' + pair).digest();
 }
 
-// ─── dispatcher ─────────────────────────────────────────────────────────────
-
 /**
- * Create a pairing session.
- *
- * Return shapes:
- *   hyperswarm: { code, promise }
- *   libp2p:     { code, token, promise }
- *
- * The CLI/RPC prints `code` (+ `token` if present) immediately while the
- * handshake runs in `promise` in the background.
+ * Create a pairing code.
+ * Returns `{ code, promise }` synchronously so the CLI/RPC can print the code
+ * immediately while the handshake runs in the background.
  */
-export function createPair({ transport, identity, nickname, ttlMs = 5 * 60 * 1000 }) {
-  const kind = transport?.kind || 'hyperswarm';
+export function createPair({ transport, identity, nickname, ttlMs = 10 * 60 * 1000 }) {
   const code = generatePairCode();
+  const promise = runPairFlow({ transport, identity, nickname, role: 'creator', code, ttlMs });
+  audit('pair.create', { code, topic: b4a.toString(pairTopic(code), 'hex').slice(0, 16) });
+  return { code, promise };
+}
 
-  if (kind === 'hyperswarm') {
-    const promise = (async () => {
-      const { runHyperswarmPairFlow } = await import('./hyperswarm-pair.js');
-      return runHyperswarmPairFlow({
-        transport, identity, nickname, role: 'creator', code, ttlMs,
+/**
+ * Redeem a pairing code.
+ * Returns a Promise that resolves with `{ peer: { pubHex, nickname } }` once
+ * the remote side's signature is verified.
+ */
+export async function redeemPair({ transport, identity, nickname, code, ttlMs = 10 * 60 * 1000 }) {
+  audit('pair.redeem', { code, topic: b4a.toString(pairTopic(code), 'hex').slice(0, 16) });
+  const peer = await runPairFlow({ transport, identity, nickname, role: 'redeemer', code, ttlMs });
+  return { peer };
+}
+
+// Core state machine used by both creator and redeemer. Returns peer info on success.
+function runPairFlow({ transport, identity, nickname, role, code, ttlMs }) {
+  return new Promise((resolve, reject) => {
+    const topic = pairTopic(code);
+
+    // Build our signed pair-ack once
+    const envelope = signEnvelope(identity, 'pair-ack', { nickname, code, role });
+    const frame = pairAckFrame({ pubHex: identity.pubHex, nickname, envelope });
+    const encoded = encode(frame);
+
+    let done = false;
+    let unsubAck;
+    let unsubConnect;
+    let timer;
+
+    const finish = (fn, value) => {
+      if (done) return;
+      done = true;
+      try { unsubAck?.(); } catch {}
+      try { unsubConnect?.(); } catch {}
+      clearTimeout(timer);
+      try { transport.swarm.leave(topic).catch(() => {}); } catch {}
+      fn(value);
+    };
+
+    unsubAck = transport.onPairAck((socket, msg) => {
+      if (done) return;
+      if (!msg.envelope || msg.envelope.payload?.code !== code) return;
+      if (!verifyEnvelope(msg.envelope)) return;
+      if (msg.envelope.by !== msg.pubHex) return;
+      if (msg.pubHex === identity.pubHex) return; // ignore our own broadcasts
+
+      upsertPeer(msg.pubHex, {
+        self_nickname: msg.nickname,
+        fp_short: msg.pubHex.slice(0, 8),
+        trust: 'trusted',
+        online: true,
       });
-    })();
-    audit('pair.create', {
-      code,
-      topic: b4a.toString(pairTopic(code), 'hex').slice(0, 16),
-      transport: 'hyperswarm',
+      try { transport.attachSocket(msg.pubHex, socket); } catch {}
+
+      // Join permanent sorted-pair topic so we can reconnect after restart
+      try {
+        const permTopic = sortedPairTopic(identity.pubHex, msg.pubHex);
+        transport.swarm.join(permTopic, { server: true, client: true });
+      } catch {}
+
+      audit('pair.success', { peer: msg.pubHex.slice(0, 16), role });
+
+      // Re-broadcast our ack so the peer also completes its handshake
+      // (handles race where our first broadcast arrived before they registered their handler)
+      try { transport.broadcast(frame); } catch {}
+
+      finish(resolve, { pubHex: msg.pubHex, nickname: msg.nickname });
     });
-    return { code, promise };
-  }
 
-  if (kind === 'libp2p') {
-    // Synchronously build the token so the CLI can print it immediately.
-    // Throws if transport not started — bubbles to caller.
-    // Dynamic import would break synchronous token return; we import statically.
-    // (This file already depends on ./libp2p-pair.js indirectly; direct import
-    // is cheap and keeps createPair's sync contract for the `token` field.)
-    // eslint-disable-next-line
-    const { buildPairToken, runLibp2pPairFlow } = requireLibp2pPair();
-    const token = buildPairToken({ transport, identity, code });
-    const promise = runLibp2pPairFlow({
-      transport, identity, nickname, role: 'creator', code, ttlMs,
+    // Push our ack on every NEW socket too (peers joining the topic after us)
+    unsubConnect = transport.onConnect((socket) => {
+      try { socket.write(encoded); } catch {}
     });
-    audit('pair.create', { code, transport: 'libp2p' });
-    return { code, token, promise };
-  }
 
-  throw new Error(`pair.js: unknown transport.kind="${kind}"`);
-}
+    // Join the pair topic (server+client) so new peers can find us
+    try { transport.swarm.join(topic, { server: true, client: true }); } catch {}
 
-/**
- * Redeem a pairing.
- *
- * Accepts:
- *   - `{ code }` (hyperswarm only): 6-digit code.
- *   - `{ token }` (libp2p only): full `demi-pair1:…` bundle.
- *
- * Libp2p redeem REQUIRES a token; the code alone is not sufficient because
- * there is no public rendezvous — the token carries peerId + multiaddrs.
- */
-export async function redeemPair({ transport, identity, nickname, code, token, ttlMs = 5 * 60 * 1000 }) {
-  const kind = transport?.kind || 'hyperswarm';
+    // Broadcast over all CURRENTLY open sockets (e.g. club topic peers)
+    try { transport.broadcast(frame); } catch {}
 
-  if (kind === 'hyperswarm') {
-    if (!code) throw new Error('hyperswarm redeem requires a 6-digit code');
-    audit('pair.redeem', {
-      code,
-      topic: b4a.toString(pairTopic(code), 'hex').slice(0, 16),
-      transport: 'hyperswarm',
-    });
-    const { runHyperswarmPairFlow } = await import('./hyperswarm-pair.js');
-    const peer = await runHyperswarmPairFlow({
-      transport, identity, nickname, role: 'redeemer', code, ttlMs,
-    });
-    return { peer };
-  }
-
-  if (kind === 'libp2p') {
-    if (!token) {
-      throw new Error('libp2p redeem requires full token (code is not sufficient)');
-    }
-    const { runLibp2pPairFlow, decodePairToken } = await import('./libp2p-pair.js');
-    const decoded = decodePairToken(token); // throws if malformed / expired handled downstream
-    audit('pair.redeem', {
-      code: decoded.code,
-      transport: 'libp2p',
-      creator_peer: decoded.peerId.slice(0, 16),
-    });
-    const peer = await runLibp2pPairFlow({
-      transport, identity, nickname, role: 'redeemer', token, ttlMs,
-    });
-    return { peer };
-  }
-
-  throw new Error(`pair.js: unknown transport.kind="${kind}"`);
-}
-
-// ─── internal: synchronous libp2p-pair loader ──────────────────────────────
-// createPair needs to return `token` synchronously so callers can print it
-// right away. ES modules don't have sync `require`; we use a module-level
-// dynamic-import-then-cache trick. To keep createPair sync, we actually use
-// top-level await indirectly via a bootstrap import that runs once.
-//
-// NOTE: because `createPair` is called from `rpc('pair.new')` inside an async
-// handler, we can safely use an awaited import on first call and cache the
-// module afterwards.  The `requireLibp2pPair()` call below is only reached
-// from the `kind === 'libp2p'` branch — callers on that branch should have
-// awaited `ensureLibp2pPairLoaded()` during node startup.  For v0.2.1 we take
-// the simpler approach: synchronously use `import.meta` resolution via
-// pre-registered `LIBP2P_PAIR_MODULE`, seeded by the module loader below.
-
-let _libp2pPairMod = null;
-
-function requireLibp2pPair() {
-  if (_libp2pPairMod) return _libp2pPairMod;
-  throw new Error(
-    'libp2p-pair module not preloaded. Call ensureLibp2pPairLoaded() before createPair() on libp2p transport.',
-  );
-}
-
-/**
- * Preload the libp2p-pair module so createPair() can return `token` synchronously.
- * Safe to call multiple times; idempotent.
- */
-export async function ensureLibp2pPairLoaded() {
-  if (_libp2pPairMod) return _libp2pPairMod;
-  _libp2pPairMod = await import('./libp2p-pair.js');
-  return _libp2pPairMod;
+    timer = setTimeout(() => {
+      finish(reject, new Error(`pair ${role} timeout (${Math.round(ttlMs / 60000)} min)`));
+    }, ttlMs);
+  });
 }
