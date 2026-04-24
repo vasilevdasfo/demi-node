@@ -58,23 +58,6 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
-- **BREAKING: libp2p pair flow migrated from GossipSub rendezvous to direct-dial**
-  `/demi/pair-req/1.0.0` (v0.2.1). The GossipSub scaffold (commit `3314946`)
-  was withdrawn after Gemini 3 Flash adversarial review returned a class-break
-  (severity 5): a passive subscriber of `demi-pair/v1/<sha256(code)>` sniffs
-  the pair-code out of a signed envelope, publishes its own envelope under a
-  different ed25519 key, and gets auto-promoted to `trust:'trusted'` on the
-  creator's side. Signed envelope only proves key-ownership, not secret-knowledge;
-  pairing-over-public-pubsub has no PAKE properties.
-  New flow: creator never broadcasts. The pair token
-  `demi-pair1:<base64url({c, p, a, h, t})>` (code + peerId + multiaddrs + creator pubHex + ts)
-  is transmitted out-of-band. Redeemer decodes and direct-dials the creator.
-  Security gates: token 5-min TTL, single-use code (creator marks `usedAt`),
-  rate-limit ≤3 pair-req per remote peerId per minute (fail-closed),
-  recipient-binding `envelope.payload.recipient === creator.pubHex`,
-  2 KB pre-parse frame cap, 10s stream-read + 15s dial timeouts.
-  Full post-mortem + v0.2.1 threat model in `docs/ETAPE_B_v0.2_pairing-design.md`.
-  Removed dep: `@libp2p/gossipsub`.
 - **Gemini adversarial review of libp2p prototype** (pre-refactor gate, severity 5).
   Three issues to mitigate in the libp2p adapter (documented in `src/transport/libp2p.js`):
   1. DHT Sybil/Eclipse on custom protocol id → `clientMode:true` + trusted bootstrap.

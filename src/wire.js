@@ -12,26 +12,19 @@ export function encode(msg) {
 }
 
 // Streaming line parser — call onLine for each complete line
-//
-// Gemini sv2 SEV-4 (OOM) fix: length check runs BEFORE concat. If a peer
-// streams data without '\n', the previous post-split check was unreachable
-// (while loop only entered after indexOf('\n') >= 0), allowing `buf` to grow
-// unbounded in heap. Move the cap ahead of concat so an attacker who never
-// sends a newline gets the buffer flushed after MAX_FRAME*4 bytes.
 export function makeParser(onLine) {
   let buf = '';
   return (chunk) => {
-    const added = b4a.toString(chunk, 'utf8');
-    if (buf.length + added.length > MAX_FRAME * 4) {
-      buf = ''; // flood protection BEFORE concat (unbounded-growth guard)
-      return;
-    }
-    buf += added;
+    buf += b4a.toString(chunk, 'utf8');
     let idx;
     while ((idx = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, idx);
       buf = buf.slice(idx + 1);
       if (!line.trim()) continue;
+      if (buf.length > MAX_FRAME * 4) {
+        buf = ''; // protection against flood
+        continue;
+      }
       try {
         onLine(JSON.parse(line));
       } catch {
