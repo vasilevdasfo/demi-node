@@ -42,6 +42,7 @@ export function loadConfig() {
       pairTtlMs: 10 * 60 * 1000,
       deadManDays: 30,
       referredBy: null,
+      allowOnlyTrusted: true,  // security: reject messages from trust=seen/stranger peers
     };
   }
 }

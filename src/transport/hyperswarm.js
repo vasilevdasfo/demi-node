@@ -40,7 +40,9 @@ export class Transport {
   async rejoinAllKnown() {
     // Re-join permanent sorted-pair topics for all trusted peers
     const { listPeers } = await import('../db.js');
-    const peers = listPeers().filter((p) => p.trust === 'trusted' || p.trust === 'seen');
+    const cfg = await import('../paths.js').then((m) => m.loadConfig());
+    const allowOnlyTrusted = cfg.allowOnlyTrusted ?? true;
+    const peers = listPeers().filter((p) => allowOnlyTrusted ? p.trust === 'trusted' : (p.trust === 'trusted' || p.trust === 'seen'));
     for (const p of peers) {
       if (p.pubkey === this.identity.pubHex) continue;
       await this.joinPeer(p.pubkey);
@@ -89,7 +91,7 @@ export class Transport {
           const sessionOk = payload.session === hyperHex;
           const freshOk = typeof payload.ts === 'number' && Math.abs(Date.now() - payload.ts) < 60_000;
           if (ok && peer && sessionOk && freshOk &&
-              (peer.trust === 'trusted' || peer.trust === 'seen')) {
+              peer.trust === 'trusted') {
             this.attachSocket(peer.pubkey, socket);
             upsertPeer(peer.pubkey, { online: true, nickname: msg.nick || peer.nickname });
             audit('transport.rebind', { peer: peer.pubkey.slice(0, 16), verified: true });
